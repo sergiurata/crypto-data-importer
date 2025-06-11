@@ -16,12 +16,13 @@ project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, project_root)
 
 # Import all test modules
-import test_configuration_manager
-import test_coingecko_provider
-import test_kraken_mapper
-import test_amibroker_adapter
-import test_data_filter
-import test_import_orchestrator
+import test_core
+import test_providers
+import test_mappers
+import test_adapters
+import test_filters
+import test_orchestrators
+import test_schedulers
 
 # Optional imports for enhanced features
 try:
@@ -109,12 +110,13 @@ class TestSuiteRunner:
     
     def __init__(self):
         self.test_modules = [
-            test_configuration_manager,
-            test_coingecko_provider,
-            test_kraken_mapper,
-            test_amibroker_adapter,
-            test_data_filter,
-            test_import_orchestrator
+            test_adapters,
+            test_core,
+            test_filters,
+            test_mappers,
+            test_orchestrators,
+            test_providers,
+            test_schedulers
         ]
         
         self.coverage_instance = None

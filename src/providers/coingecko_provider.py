@@ -9,7 +9,7 @@ from typing import Dict, List, Optional
 from datetime import datetime
 import logging
 
-from abstract_data_provider import AbstractDataProvider
+from .abstract_data_provider import AbstractDataProvider
 
 logger = logging.getLogger(__name__)
 

@@ -8,8 +8,8 @@ from unittest.mock import Mock, patch, MagicMock
 import requests
 import time
 
-from coingecko_provider import CoinGeckoProvider
-from configuration_manager import ConfigurationManager
+from src.providers.coingecko_provider import CoinGeckoProvider
+from src.core.configuration_manager import ConfigurationManager
 
 
 class TestCoinGeckoProvider(unittest.TestCase):

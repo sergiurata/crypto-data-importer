@@ -7,9 +7,9 @@ from typing import Dict, Type, List, Optional
 import logging
 import importlib
 
-from abstract_data_provider import AbstractDataProvider
-from abstract_exchange_mapper import AbstractExchangeMapper
-from abstract_database_adapter import AbstractDatabaseAdapter
+from ..providers.abstract_data_provider import AbstractDataProvider
+from ..mappers.abstract_exchange_mapper import AbstractExchangeMapper
+from ..adapters.abstract_database_adapter import AbstractDatabaseAdapter
 
 logger = logging.getLogger(__name__)
 

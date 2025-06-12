@@ -9,8 +9,8 @@ import pandas as pd
 from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime, timedelta
 
-from amibroker_adapter import AmiBrokerAdapter
-from configuration_manager import ConfigurationManager
+from src.adapters.amibroker_adapter import AmiBrokerAdapter
+from src.core.configuration_manager import ConfigurationManager
 
 
 class TestAmiBrokerAdapter(unittest.TestCase):

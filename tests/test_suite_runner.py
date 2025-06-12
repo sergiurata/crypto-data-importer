@@ -10,19 +10,12 @@ import argparse
 from io import StringIO
 import time
 from typing import List, Dict, Any
+from pathlib import Path
 
 # Add project root to Python path
-project_root = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, project_root)
-
-# Import all test modules
-import test_core
-import test_providers
-import test_mappers
-import test_adapters
-import test_filters
-import test_orchestrators
-import test_schedulers
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root / "src"))
+sys.path.insert(0, str(project_root))
 
 # Optional imports for enhanced features
 try:
@@ -109,20 +102,11 @@ class TestSuiteRunner:
     """Main test suite runner with various options"""
     
     def __init__(self):
-        self.test_modules = [
-            test_adapters,
-            test_core,
-            test_filters,
-            test_mappers,
-            test_orchestrators,
-            test_providers,
-            test_schedulers
-        ]
-        
+        self.test_dir = Path(__file__).parent
         self.coverage_instance = None
         if COVERAGE_AVAILABLE:
             self.coverage_instance = coverage.Coverage(
-                source=['./'],
+                source=[str(project_root / "src")],
                 omit=[
                     'test_*.py',
                     'tests/*',
@@ -132,23 +116,25 @@ class TestSuiteRunner:
             )
     
     def discover_tests(self, pattern: str = None, start_dir: str = None) -> unittest.TestSuite:
-        """Discover and load tests"""
-        if pattern or start_dir:
-            # Use test discovery
-            loader = unittest.TestLoader()
-            start_directory = start_dir or '.'
-            pattern = pattern or 'test_*.py'
-            return loader.discover(start_directory, pattern=pattern)
-        else:
-            # Load from known modules
-            suite = unittest.TestSuite()
-            loader = unittest.TestLoader()
-            
-            for module in self.test_modules:
-                module_suite = loader.loadTestsFromModule(module)
-                suite.addTest(module_suite)
-            
+        """Discover and load tests using unittest discovery"""
+        loader = unittest.TestLoader()
+        
+        # Set default values
+        if start_dir is None:
+            start_dir = str(self.test_dir)
+        if pattern is None:
+            pattern = 'test_*.py'
+        
+        print(f"Discovering tests in: {start_dir}")
+        print(f"Using pattern: {pattern}")
+        
+        try:
+            suite = loader.discover(start_dir, pattern=pattern, top_level_dir=str(project_root))
+            print(f"Found {suite.countTestCases()} test cases")
             return suite
+        except Exception as e:
+            print(f"Error during test discovery: {e}")
+            return unittest.TestSuite()
     
     def run_specific_tests(self, test_names: List[str]) -> unittest.TestSuite:
         """Run specific test classes or methods"""
@@ -157,32 +143,45 @@ class TestSuiteRunner:
         
         for test_name in test_names:
             try:
-                # Try to load as module.class.method
                 if '.' in test_name:
+                    # Handle module.class.method format
                     parts = test_name.split('.')
-                    if len(parts) == 2:
-                        # module.class
-                        module_name, class_name = parts
-                        module = globals().get(module_name)
-                        if module:
+                    if len(parts) >= 2:
+                        module_name = parts[0]
+                        class_name = parts[1]
+                        
+                        # Try to import the module
+                        try:
+                            module = __import__(module_name, fromlist=[class_name])
                             test_class = getattr(module, class_name)
-                            suite.addTest(loader.loadTestsFromTestCase(test_class))
-                    elif len(parts) == 3:
-                        # module.class.method
-                        module_name, class_name, method_name = parts
-                        module = globals().get(module_name)
-                        if module:
-                            test_class = getattr(module, class_name)
-                            suite.addTest(test_class(method_name))
+                            
+                            if len(parts) == 3:
+                                # Specific test method
+                                method_name = parts[2]
+                                suite.addTest(test_class(method_name))
+                            else:
+                                # All tests in class
+                                suite.addTest(loader.loadTestsFromTestCase(test_class))
+                        except (ImportError, AttributeError) as e:
+                            print(f"Could not load {test_name}: {e}")
                 else:
-                    # Try as class name in all modules
+                    # Try to find test class by name in discovered tests
+                    all_tests = self.discover_tests()
                     found = False
-                    for module in self.test_modules:
-                        if hasattr(module, test_name):
-                            test_class = getattr(module, test_name)
-                            suite.addTest(loader.loadTestsFromTestCase(test_class))
-                            found = True
-                            break
+                    
+                    for test_group in all_tests:
+                        if hasattr(test_group, '_tests'):
+                            for test_case in test_group._tests:
+                                if hasattr(test_case, '_tests'):
+                                    for test in test_case._tests:
+                                        if test.__class__.__name__ == test_name:
+                                            suite.addTest(loader.loadTestsFromTestCase(test.__class__))
+                                            found = True
+                                            break
+                                elif test_case.__class__.__name__ == test_name:
+                                    suite.addTest(loader.loadTestsFromTestCase(test_case.__class__))
+                                    found = True
+                                    break
                     
                     if not found:
                         print(f"Warning: Test '{test_name}' not found")
@@ -191,6 +190,22 @@ class TestSuiteRunner:
                 print(f"Error loading test '{test_name}': {e}")
         
         return suite
+    
+    def list_all_tests(self) -> List[str]:
+        """List all available tests"""
+        tests = []
+        suite = self.discover_tests()
+        
+        def extract_tests(test_suite):
+            for test in test_suite:
+                if isinstance(test, unittest.TestSuite):
+                    extract_tests(test)
+                else:
+                    test_id = test.id()
+                    tests.append(test_id)
+        
+        extract_tests(suite)
+        return tests
     
     def run_tests(self, 
                   verbosity: int = 2,
@@ -213,6 +228,14 @@ class TestSuiteRunner:
         else:
             suite = self.discover_tests(pattern, start_dir)
         
+        # Check if we found any tests
+        test_count = suite.countTestCases()
+        if test_count == 0:
+            print("No tests found!")
+            print(f"Search directory: {start_dir or self.test_dir}")
+            print(f"Search pattern: {pattern or 'test_*.py'}")
+            return unittest.TestResult()
+        
         # Choose runner
         if xml_output and XML_RUNNER_AVAILABLE:
             runner = XMLTestRunner(
@@ -227,7 +250,7 @@ class TestSuiteRunner:
             )
         
         # Run tests
-        print(f"Running {suite.countTestCases()} tests...")
+        print(f"Running {test_count} tests...")
         print("=" * 70)
         
         start_time = time.time()
@@ -335,15 +358,16 @@ def main():
     
     if args.list_tests:
         # List all available tests
-        suite = runner.discover_tests()
-        print("Available tests:")
-        for test_group in suite:
-            for test_case in test_group:
-                if hasattr(test_case, '_tests'):
-                    for test in test_case._tests:
-                        print(f"  {test.__class__.__module__}.{test.__class__.__name__}.{test._testMethodName}")
-                else:
-                    print(f"  {test_case.__class__.__module__}.{test_case.__class__.__name__}.{test_case._testMethodName}")
+        print("Discovering tests...")
+        tests = runner.list_all_tests()
+        if tests:
+            print(f"Found {len(tests)} tests:")
+            for test in sorted(tests):
+                print(f"  {test}")
+        else:
+            print("No tests found!")
+            print(f"Search directory: {runner.test_dir}")
+            print("Make sure your test files follow the naming pattern 'test_*.py'")
         return
     
     # Check for coverage availability

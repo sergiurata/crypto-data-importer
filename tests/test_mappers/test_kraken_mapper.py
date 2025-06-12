@@ -9,9 +9,9 @@ import json
 from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime, timedelta
 
-from kraken_mapper import KrakenMapper
-from abstract_exchange_mapper import ExchangeInfo
-from configuration_manager import ConfigurationManager
+from src.mappers.kraken_mapper import KrakenMapper
+from src.mappers.abstract_exchange_mapper import ExchangeInfo
+from src.core.configuration_manager import ConfigurationManager
 
 
 class TestKrakenMapper(unittest.TestCase):

@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 import logging
 
-from abstract_exchange_mapper import AbstractExchangeMapper, ExchangeInfo
+from .abstract_exchange_mapper import AbstractExchangeMapper, ExchangeInfo
 
 logger = logging.getLogger(__name__)
 

@@ -10,8 +10,8 @@ import logging.handlers
 from unittest.mock import Mock, patch, MagicMock
 from io import StringIO
 
-from logging_manager import LoggingManager
-from configuration_manager import ConfigurationManager
+from src.core.logging_manager import LoggingManager
+from src.core.configuration_manager import ConfigurationManager
 
 
 class TestLoggingManager(unittest.TestCase):

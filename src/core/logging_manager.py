@@ -6,7 +6,7 @@ Handles logging configuration and management
 import logging
 import logging.handlers
 from typing import Optional
-from configuration_manager import ConfigurationManager
+from .configuration_manager import ConfigurationManager
 
 
 class LoggingManager:

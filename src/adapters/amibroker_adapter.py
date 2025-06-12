@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 import logging
 
-from abstract_database_adapter import AbstractDatabaseAdapter
+from .abstract_database_adapter import AbstractDatabaseAdapter
 
 logger = logging.getLogger(__name__)
 

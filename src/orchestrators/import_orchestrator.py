@@ -9,13 +9,13 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass
 import logging
 
-from configuration_manager import ConfigurationManager
-from logging_manager import LoggingManager
-from abstract_data_provider import AbstractDataProvider
-from abstract_exchange_mapper import AbstractExchangeMapper
-from abstract_database_adapter import AbstractDatabaseAdapter
-from data_filter import DataFilter
-from update_scheduler import UpdateScheduler
+from ..core.configuration_manager import ConfigurationManager
+from ..core.logging_manager import LoggingManager
+from ..providers.abstract_data_provider import AbstractDataProvider
+from ..mappers.abstract_exchange_mapper import AbstractExchangeMapper
+from ..adapters.abstract_database_adapter import AbstractDatabaseAdapter
+from ..filters.data_filter import DataFilter
+from ..schedulers.update_scheduler import UpdateScheduler
 
 logger = logging.getLogger(__name__)
 

@@ -9,13 +9,13 @@ import pandas as pd
 from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime
 
-from import_orchestrator import ImportOrchestrator, ImportResult, ProcessResult
-from configuration_manager import ConfigurationManager
-from abstract_data_provider import AbstractDataProvider
-from abstract_exchange_mapper import AbstractExchangeMapper, ExchangeInfo
-from abstract_database_adapter import AbstractDatabaseAdapter
-from data_filter import DataFilter
-from update_scheduler import UpdateScheduler
+from src.orchestrators.import_orchestrator import ImportOrchestrator, ImportResult, ProcessResult
+from src.core.configuration_manager import ConfigurationManager
+from src.providers.abstract_data_provider import AbstractDataProvider
+from src.mappers.abstract_exchange_mapper import AbstractExchangeMapper, ExchangeInfo
+from src.adapters.abstract_database_adapter import AbstractDatabaseAdapter
+from src.filters.data_filter import DataFilter
+from src.schedulers.update_scheduler import UpdateScheduler
 
 
 class TestImportResult(unittest.TestCase):

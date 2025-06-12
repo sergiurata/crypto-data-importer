@@ -6,8 +6,8 @@ import unittest
 from unittest.mock import Mock, patch
 from datetime import datetime, timedelta
 
-from data_filter import DataFilter, FilterRule
-from configuration_manager import ConfigurationManager
+from src.filters.data_filter import DataFilter, FilterRule
+from src.core.configuration_manager import ConfigurationManager
 
 
 class TestFilterRule(unittest.TestCase):

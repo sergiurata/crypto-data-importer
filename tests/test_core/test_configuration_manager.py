@@ -8,7 +8,7 @@ import os
 from unittest.mock import patch, mock_open
 import configparser
 
-from configuration_manager import ConfigurationManager
+from src.core.configuration_manager import ConfigurationManager
 
 
 class TestConfigurationManager(unittest.TestCase):

@@ -240,21 +240,3 @@ class DataFilter:
         """
         return min_price <= price <= max_price
     
-    def validate_age(self, launch_date: str, min_days: int = 0) -> bool:
-        """Validate coin age against minimum days
-        
-        Args:
-            launch_date: Launch date string (ISO format)
-            min_days: Minimum age in days
-            
-        Returns:
-            True if coin is old enough, False otherwise
-        """
-        try:
-            from datetime import datetime, timedelta
-            
-            if not launch_date:
-                return True  # No date info, assume it's old enough
-            
-            launch = datetime.fromisoformat(launch_date.replace('Z', '+00:00'))
-            

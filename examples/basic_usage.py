@@ -11,9 +11,9 @@ from pathlib import Path
 src_path = Path(__file__).parent.parent / "src"
 sys.path.insert(0, str(src_path))
 
-from src.core.configuration_manager import ConfigurationManager
-from src.orchestrators.import_orchestrator import ImportOrchestrator
-from src.core.factory_classes import create_components_from_config
+from core.configuration_manager import ConfigurationManager
+from orchestrators.import_orchestrator import ImportOrchestrator
+from core.factory_classes import create_components_from_config
 
 
 def basic_import_example():

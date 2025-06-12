@@ -6,10 +6,16 @@ Implements the Factory Pattern for extensible component creation
 from typing import Dict, Type, List, Optional
 import logging
 import importlib
+import sys
+from pathlib import Path
 
-from ..providers.abstract_data_provider import AbstractDataProvider
-from ..mappers.abstract_exchange_mapper import AbstractExchangeMapper
-from ..adapters.abstract_database_adapter import AbstractDatabaseAdapter
+# Add src to path
+src_path = Path(__file__).parent.parent.parent / "src"
+sys.path.insert(0, str(src_path))
+
+from providers.abstract_data_provider import AbstractDataProvider
+from mappers.abstract_exchange_mapper import AbstractExchangeMapper
+from adapters.abstract_database_adapter import AbstractDatabaseAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -273,15 +279,15 @@ def register_default_implementations():
     """Register the default implementations with their factories"""
     try:
         # Register CoinGecko provider
-        from coingecko_provider import CoinGeckoProvider
+        from providers.coingecko_provider import CoinGeckoProvider
         ProviderFactory.register_provider('coingecko', CoinGeckoProvider)
         
         # Register Kraken mapper
-        from kraken_mapper import KrakenMapper
+        from mappers.kraken_mapper import KrakenMapper
         MapperFactory.register_mapper('kraken', KrakenMapper)
         
         # Register AmiBroker adapter
-        from amibroker_adapter import AmiBrokerAdapter
+        from adapters.amibroker_adapter import AmiBrokerAdapter
         AdapterFactory.register_adapter('amibroker', AmiBrokerAdapter)
         
         logger.info("Registered default implementations")

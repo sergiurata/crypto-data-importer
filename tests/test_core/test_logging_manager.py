@@ -9,9 +9,15 @@ import logging
 import logging.handlers
 from unittest.mock import Mock, patch, MagicMock
 from io import StringIO
+import sys
+from pathlib import Path
 
-from src.core.logging_manager import LoggingManager
-from src.core.configuration_manager import ConfigurationManager
+# Add src to path
+src_path = Path(__file__).parent.parent.parent / "src"
+sys.path.insert(0, str(src_path))
+
+from core.logging_manager import LoggingManager
+from core.configuration_manager import ConfigurationManager
 
 
 class TestLoggingManager(unittest.TestCase):

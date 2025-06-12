@@ -8,14 +8,20 @@ from datetime import datetime
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 import logging
+import sys
+from pathlib import Path
 
-from ..core.configuration_manager import ConfigurationManager
-from ..core.logging_manager import LoggingManager
-from ..providers.abstract_data_provider import AbstractDataProvider
-from ..mappers.abstract_exchange_mapper import AbstractExchangeMapper
-from ..adapters.abstract_database_adapter import AbstractDatabaseAdapter
-from ..filters.data_filter import DataFilter
-from ..schedulers.update_scheduler import UpdateScheduler
+# Add src to path
+src_path = Path(__file__).parent.parent.parent / "src"
+sys.path.insert(0, str(src_path))
+
+from core.configuration_manager import ConfigurationManager
+from core.logging_manager import LoggingManager
+from providers.abstract_data_provider import AbstractDataProvider
+from mappers.abstract_exchange_mapper import AbstractExchangeMapper
+from adapters.abstract_database_adapter import AbstractDatabaseAdapter
+from filters.data_filter import DataFilter
+from schedulers.update_scheduler import UpdateScheduler
 
 logger = logging.getLogger(__name__)
 

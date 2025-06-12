@@ -11,8 +11,12 @@ import time
 from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime, timedelta
 
-from src.schedulers.update_scheduler import UpdateScheduler
-from src.core.configuration_manager import ConfigurationManager
+# Add src to path
+src_path = Path(__file__).parent.parent.parent / "src"
+sys.path.insert(0, str(src_path))
+
+from schedulers.update_scheduler import UpdateScheduler
+from core.configuration_manager import ConfigurationManager
 
 
 class TestUpdateScheduler(unittest.TestCase):

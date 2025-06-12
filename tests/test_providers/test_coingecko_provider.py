@@ -8,8 +8,12 @@ from unittest.mock import Mock, patch, MagicMock
 import requests
 import time
 
-from src.providers.coingecko_provider import CoinGeckoProvider
-from src.core.configuration_manager import ConfigurationManager
+# Add src to path
+src_path = Path(__file__).parent.parent.parent / "src"
+sys.path.insert(0, str(src_path))
+
+from providers.coingecko_provider import CoinGeckoProvider
+from core.configuration_manager import ConfigurationManager
 
 
 class TestCoinGeckoProvider(unittest.TestCase):

@@ -9,13 +9,17 @@ import pandas as pd
 from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime
 
-from src.orchestrators.import_orchestrator import ImportOrchestrator, ImportResult, ProcessResult
-from src.core.configuration_manager import ConfigurationManager
-from src.providers.abstract_data_provider import AbstractDataProvider
-from src.mappers.abstract_exchange_mapper import AbstractExchangeMapper, ExchangeInfo
-from src.adapters.abstract_database_adapter import AbstractDatabaseAdapter
-from src.filters.data_filter import DataFilter
-from src.schedulers.update_scheduler import UpdateScheduler
+# Add src to path
+src_path = Path(__file__).parent.parent.parent / "src"
+sys.path.insert(0, str(src_path))
+
+from orchestrators.import_orchestrator import ImportOrchestrator, ImportResult, ProcessResult
+from core.configuration_manager import ConfigurationManager
+from providers.abstract_data_provider import AbstractDataProvider
+from mappers.abstract_exchange_mapper import AbstractExchangeMapper, ExchangeInfo
+from adapters.abstract_database_adapter import AbstractDatabaseAdapter
+from filters.data_filter import DataFilter
+from schedulers.update_scheduler import UpdateScheduler
 
 
 class TestImportResult(unittest.TestCase):

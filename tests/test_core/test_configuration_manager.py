@@ -7,8 +7,14 @@ import tempfile
 import os
 from unittest.mock import patch, mock_open
 import configparser
+import sys
+from pathlib import Path
 
-from src.core.configuration_manager import ConfigurationManager
+# Add src to path
+src_path = Path(__file__).parent.parent.parent / "src"
+sys.path.insert(0, str(src_path))
+
+from core.configuration_manager import ConfigurationManager
 
 
 class TestConfigurationManager(unittest.TestCase):
@@ -207,7 +213,7 @@ database_path = /test/path/test.adb
         config_manager = ConfigurationManager(self.test_config_path)
         
         # This should not raise an exception
-        with patch('configuration_manager.logger') as mock_logger:
+        with patch('core.configuration_manager.logger') as mock_logger:
             config_manager.print_config()
             mock_logger.info.assert_called()
     
@@ -228,7 +234,7 @@ database_path = /test/path/test.adb
         with open(self.test_config_path, 'w') as f:
             f.write("Invalid config content [[[")
         
-        with patch('configuration_manager.logger') as mock_logger:
+        with patch('core.configuration_manager.logger') as mock_logger:
             config_manager = ConfigurationManager(self.test_config_path)
             
             # Should still have default values

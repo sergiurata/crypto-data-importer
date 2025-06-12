@@ -6,8 +6,12 @@ import unittest
 from unittest.mock import Mock, patch
 from datetime import datetime, timedelta
 
-from src.filters.data_filter import DataFilter, FilterRule
-from src.core.configuration_manager import ConfigurationManager
+# Add src to path
+src_path = Path(__file__).parent.parent.parent / "src"
+sys.path.insert(0, str(src_path))
+
+from filters.data_filter import DataFilter, FilterRule
+from core.configuration_manager import ConfigurationManager
 
 
 class TestFilterRule(unittest.TestCase):

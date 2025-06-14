@@ -10,8 +10,15 @@ import time
 from datetime import datetime
 from typing import Dict, List, Optional
 import logging
+import sys
+from pathlib import Path
+
+# Add src to path
+src_path = Path(__file__).parent.parent.parent / "src"
+sys.path.insert(0, str(src_path))
 
 from .abstract_exchange_mapper import AbstractExchangeMapper, ExchangeInfo
+from providers.abstract_data_provider import AbstractDataProvider
 
 logger = logging.getLogger(__name__)
 
@@ -106,19 +113,13 @@ class KrakenMapper(AbstractExchangeMapper):
         exchange_info = self.map_coin_to_exchange(coin_id)
         return exchange_info.pair_name if exchange_info else None
     
-    def _build_coin_mapping(self) -> Dict:
+    def _build_coin_mapping(self, data_provider: AbstractDataProvider) -> Dict:
         """Build mapping between CoinGecko IDs and Kraken data using CoinGecko API"""
         mapping = {}
         
         try:
-            # This would typically use the CoinGecko provider to get exchange data
-            # For now, we'll build a basic mapping using known conversions
-            from coingecko_provider import CoinGeckoProvider
-            
-            coingecko = CoinGeckoProvider(self.config)
-            
             # Get all coins from CoinGecko
-            all_coins = coingecko.get_all_coins()
+            all_coins = data_provider.get_all_coins()
             
             mapped_count = 0
             batch_size = 50
@@ -131,7 +132,7 @@ class KrakenMapper(AbstractExchangeMapper):
                     
                     try:
                         # Get exchange data for this coin
-                        exchange_data = coingecko.get_exchange_data(coin_id)
+                        exchange_data = data_provider.get_exchange_data(coin_id)
                         
                         if exchange_data:
                             kraken_info = self._extract_kraken_info(exchange_data)
@@ -294,7 +295,7 @@ class KrakenMapper(AbstractExchangeMapper):
             logger.debug(f"Error checking cache expiry: {e}")
             return True
     
-    def build_mapping(self) -> Dict:
+    def build_mapping(self, data_provider: AbstractDataProvider) -> Dict:
         """Build or load cached mapping"""
         # Try to load from cache first
         if self.config.getboolean('MAPPING', 'use_cached_mapping', True):
@@ -302,7 +303,7 @@ class KrakenMapper(AbstractExchangeMapper):
                 return self.mapping_cache
         
         # Build new mapping
-        return super().build_mapping()
+        return super().build_mapping(data_provider)
     
     def get_kraken_pair_info(self, pair_name: str) -> Optional[Dict]:
         """Get detailed information about a Kraken trading pair"""

@@ -197,7 +197,7 @@ class ImportOrchestrator:
             
             # Load exchange mappings
             for mapper in self.exchange_mappers:
-                if not mapper.build_mapping():
+                if not mapper.build_mapping(self.data_provider):
                     logger.warning(f"Failed to build mapping for {mapper.get_exchange_name()}")
             
             # Get all coins from data provider

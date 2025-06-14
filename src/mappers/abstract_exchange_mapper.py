@@ -7,9 +7,16 @@ from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 import logging
+import sys
+from pathlib import Path
+
+# Add src to path
+src_path = Path(__file__).parent.parent.parent / "src"
+sys.path.insert(0, str(src_path))
+
+from providers.abstract_data_provider import AbstractDataProvider
 
 logger = logging.getLogger(__name__)
-
 
 @dataclass
 class ExchangeInfo:
@@ -34,6 +41,13 @@ class AbstractExchangeMapper(ABC):
         self.exchange_name = self.get_exchange_name()
         self.mapping_cache = {}
         self.last_update = None
+        
+        # Add rate limiting configuration
+        self.requests_per_minute = config.getint('API', 'requests_per_minute', 40)
+        self.rate_limit_delay = 60.0 / self.requests_per_minute  # Calculate delay between requests
+        self.last_request_time = 0
+        self.timeout = config.getint('API', 'timeout_seconds', 30)
+        self.retry_attempts = config.getint('API', 'retry_attempts', 3)
     
     @abstractmethod
     def get_exchange_name(self) -> str:
@@ -89,7 +103,7 @@ class AbstractExchangeMapper(ABC):
         """
         pass
     
-    def build_mapping(self) -> Dict:
+    def build_mapping(self, data_provider: AbstractDataProvider) -> Dict:
         """Build the mapping between CoinGecko IDs and exchange data
         
         Returns:
@@ -101,13 +115,13 @@ class AbstractExchangeMapper(ABC):
             logger.error(f"Failed to load exchange data for {self.exchange_name}")
             return {}
         
-        mapping = self._build_coin_mapping()
+        mapping = self._build_coin_mapping(data_provider)
         logger.info(f"Built mapping for {len(mapping)} coins on {self.exchange_name}")
         
         return mapping
     
     @abstractmethod
-    def _build_coin_mapping(self) -> Dict:
+    def _build_coin_mapping(self, data_provider: AbstractDataProvider) -> Dict:
         """Implementation-specific mapping building logic
         
         Returns:
@@ -244,3 +258,33 @@ class AbstractExchangeMapper(ABC):
                     pairs.append(exchange_info)
         
         return pairs
+    
+    def handle_rate_limiting(self):
+        """Handle rate limiting between API requests"""
+        current_time = time.time()
+        time_since_last = current_time - self.last_request_time
+        
+        if time_since_last < self.rate_limit_delay:
+            sleep_time = self.rate_limit_delay - time_since_last
+            logger.debug(f"Rate limiting: sleeping for {sleep_time:.2f} seconds")
+            time.sleep(sleep_time)
+        
+        self.last_request_time = time.time()
+    
+    def make_api_request(self, url: str, **kwargs):
+        for attempt in range(self.retry_attempts):
+            self.handle_rate_limiting()
+            try:
+                response = requests.get(url, timeout=self.timeout, **kwargs)
+                response.raise_for_status()
+                return response
+            except requests.exceptions.RequestException as e:
+                if attempt < self.retry_attempts - 1:
+                    wait_time = 2 ** attempt
+                    logger.warning(f"Request failed (attempt {attempt + 1}): {e}")
+                    logger.info(f"Retrying in {wait_time} seconds...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    logger.error(f"All retry attempts failed: {e}")
+                    raise        

@@ -64,8 +64,7 @@ class KrakenMapper(AbstractExchangeMapper):
     def _load_kraken_assets(self) -> bool:
         """Load Kraken assets from API"""
         try:
-            response = self.session.get(f"{self.kraken_api_url}/Assets", timeout=30)
-            response.raise_for_status()
+            response = self.make_api_request(f"{self.kraken_api_url}/Assets")
             
             data = response.json()
             if data.get('error'):
@@ -82,8 +81,7 @@ class KrakenMapper(AbstractExchangeMapper):
     def _load_kraken_pairs(self) -> bool:
         """Load Kraken asset pairs from API"""
         try:
-            response = self.session.get(f"{self.kraken_api_url}/AssetPairs", timeout=30)
-            response.raise_for_status()
+            response = self.make_api_request(f"{self.kraken_api_url}/AssetPairs")
             
             data = response.json()
             if data.get('error'):

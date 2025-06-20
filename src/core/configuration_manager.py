@@ -40,7 +40,11 @@ class ConfigurationManager:
                 'use_cached_mapping': 'true',
                 'mapping_file': 'coingecko_kraken_mapping.json',
                 'rebuild_mapping_days': '7',
-                'cache_expiry_hours': '24'
+                'cache_expiry_hours': '24',
+                'checkpoint_enabled': 'true',
+                'checkpoint_frequency': '100',
+                'resume_on_restart': 'true',
+                'checkpoint_file': 'kraken_mapping_checkpoint.json'
             },
             'FILTERING': {
                 'include_kraken_only': 'false',
@@ -137,6 +141,18 @@ rebuild_mapping_days = 7
 
 # Cache expiry time for mapping data (hours)
 cache_expiry_hours = 24
+
+# Enable checkpoint/resume functionality for mapping process
+checkpoint_enabled = true
+
+# Number of coins to process before saving checkpoint
+checkpoint_frequency = 100
+
+# Automatically resume from checkpoint on restart
+resume_on_restart = true
+
+# File to store checkpoint progress data
+checkpoint_file = kraken_mapping_checkpoint.json
 
 [FILTERING]
 # Import only coins available on Kraken

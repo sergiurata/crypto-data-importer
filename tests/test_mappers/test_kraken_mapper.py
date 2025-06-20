@@ -1,5 +1,5 @@
 """
-Test cases for KrakenMapper with Checkpoint Functionality
+Test cases for KrakenMapper with Checkpoint/Resume Functionality
 """
 
 import unittest
@@ -16,802 +16,621 @@ import sys
 src_path = Path(__file__).parent.parent.parent / "src"
 sys.path.insert(0, str(src_path))
 
-from mappers.kraken_mapper import KrakenMapper, CheckpointData
+from mappers.kraken_mapper import KrakenMapper
 from mappers.abstract_exchange_mapper import ExchangeInfo
 from core.configuration_manager import ConfigurationManager
 
 
-class TestCheckpointData(unittest.TestCase):
-    """Test cases for CheckpointData dataclass"""
-    
-    def test_checkpoint_data_creation(self):
-        """Test creating CheckpointData with defaults"""
-        checkpoint = CheckpointData()
-        
-        self.assertEqual(checkpoint.version, "1.0")
-        self.assertEqual(checkpoint.processed_coins, [])
-        self.assertEqual(checkpoint.failed_coins, [])
-        self.assertEqual(checkpoint.mappings, {})
-        self.assertEqual(checkpoint.exchange_data, {})
-        self.assertEqual(checkpoint.current_batch, 0)
-        self.assertEqual(checkpoint.total_batches, 0)
-        self.assertEqual(checkpoint.api_call_count, 0)
-    
-    def test_checkpoint_data_with_values(self):
-        """Test creating CheckpointData with specific values"""
-        checkpoint = CheckpointData(
-            timestamp="2023-01-01T12:00:00",
-            processed_coins=["bitcoin", "ethereum"],
-            failed_coins=["failed-coin"],
-            current_batch=5,
-            total_batches=10,
-            api_call_count=25
-        )
-        
-        self.assertEqual(checkpoint.timestamp, "2023-01-01T12:00:00")
-        self.assertEqual(len(checkpoint.processed_coins), 2)
-        self.assertEqual(len(checkpoint.failed_coins), 1)
-        self.assertEqual(checkpoint.current_batch, 5)
-        self.assertEqual(checkpoint.total_batches, 10)
-        self.assertEqual(checkpoint.api_call_count, 25)
-
-
-class TestKrakenMapper(unittest.TestCase):
-    """Test cases for KrakenMapper class"""
+class TestKrakenMapperCheckpoints(unittest.TestCase):
+    """Test cases for KrakenMapper checkpoint functionality"""
     
     def setUp(self):
         """Set up test fixtures"""
         # Create mock configuration
         self.mock_config = Mock(spec=ConfigurationManager)
         self.mock_config.get.side_effect = self._mock_config_get
-        self.mock_config.getint.return_value = 24
+        self.mock_config.getint.return_value = 100
         self.mock_config.getboolean.return_value = True
         self.mock_config.getfloat.return_value = 1.5
         
-        # Create temporary directory for checkpoints
+        # Create temporary directory for test files
         self.temp_dir = tempfile.mkdtemp()
+        self.checkpoint_file = os.path.join(self.temp_dir, "test_checkpoint.json")
+        self.cache_file = os.path.join(self.temp_dir, "test_cache.json")
         
         # Create mapper instance
         self.mapper = KrakenMapper(self.mock_config)
-        self.mapper.checkpoint_dir = Path(self.temp_dir)
-        self.mapper.checkpoint_file = self.mapper.checkpoint_dir / "test_checkpoint.json"
+        self.mapper.checkpoint_file = self.checkpoint_file
+        self.mapper.cache_file = self.cache_file
     
     def tearDown(self):
         """Clean up test fixtures"""
-        # Clean up checkpoint files
-        if self.mapper.checkpoint_file.exists():
-            self.mapper.checkpoint_file.unlink()
+        # Clean up temp files
+        for file in [self.checkpoint_file, self.cache_file]:
+            if os.path.exists(file):
+                os.remove(file)
         
         # Clean up temp directory
         if os.path.exists(self.temp_dir):
-            for file in os.listdir(self.temp_dir):
-                file_path = os.path.join(self.temp_dir, file)
-                if os.path.isfile(file_path):
-                    os.remove(file_path)
-            os.rmdir(self.temp_dir)
+            try:
+                os.rmdir(self.temp_dir)
+            except OSError:
+                pass  # Directory not empty, that's ok
     
     def _mock_config_get(self, section, key, fallback=None):
         """Mock configuration getter"""
         config_values = {
-            ('MAPPING', 'mapping_file'): str(self.mapper.checkpoint_file),
-            ('MAPPING', 'cache_expiry_hours'): '24',
+            ('MAPPING', 'mapping_file'): self.cache_file,
+            ('MAPPING', 'checkpoint_file'): self.checkpoint_file,
             ('IMPORT', 'rate_limit_delay'): '1.5'
         }
         return config_values.get((section, key), fallback or '')
+    
+    def test_checkpoint_configuration(self):
+        """Test that checkpoint configuration is properly loaded"""
+        self.assertTrue(self.mapper.checkpoint_enabled)
+        self.assertEqual(self.mapper.checkpoint_frequency, 100)
+        self.assertTrue(self.mapper.resume_on_restart)
+        self.assertEqual(self.mapper.checkpoint_file, self.checkpoint_file)
+    
+    def test_should_resume_no_checkpoint(self):
+        """Test should_resume returns False when no checkpoint exists"""
+        self.assertFalse(self.mapper._should_resume())
+    
+    def test_save_checkpoint_basic(self):
+        """Test basic checkpoint saving functionality"""
+        processed_coins = ['bitcoin', 'ethereum']
+        mapping_data = {'bitcoin': {'exchange': 'kraken'}}
+        failed_coins = ['failed_coin']
+        start_time = datetime.now()
+        
+        result = self.mapper._save_checkpoint(
+            processed_index=1,
+            total_coins=1000,
+            processed_coin_ids=processed_coins,
+            mapping_data=mapping_data,
+            failed_coin_ids=failed_coins,
+            start_time=start_time
+        )
+        
+        self.assertTrue(result)
+        self.assertTrue(os.path.exists(self.checkpoint_file))
+        
+        # Verify checkpoint content
+        with open(self.checkpoint_file, 'r') as f:
+            checkpoint_data = json.load(f)
+        
+        self.assertEqual(checkpoint_data['status'], 'in_progress')
+        self.assertEqual(checkpoint_data['total_coins'], 1000)
+        self.assertEqual(checkpoint_data['processed_coins'], 2)
+        self.assertEqual(checkpoint_data['last_processed_index'], 1)
+        self.assertEqual(checkpoint_data['processed_coin_ids'], processed_coins)
+        self.assertEqual(checkpoint_data['failed_coin_ids'], failed_coins)
+        self.assertIn('start_time', checkpoint_data)
+        self.assertIn('last_checkpoint_time', checkpoint_data)
+    
+    def test_load_checkpoint_valid(self):
+        """Test loading a valid checkpoint"""
+        # Create test checkpoint
+        checkpoint_data = {
+            'status': 'in_progress',
+            'total_coins': 1000,
+            'processed_coins': 100,
+            'last_processed_index': 99,
+            'processed_coin_ids': [f'coin_{i}' for i in range(100)],
+            'failed_coin_ids': ['failed_coin'],
+            'start_time': datetime.now().isoformat(),
+            'last_checkpoint_time': datetime.now().isoformat(),
+            'batch_size': 50,
+            'checkpoint_frequency': 100
+        }
+        
+        with open(self.checkpoint_file, 'w') as f:
+            json.dump(checkpoint_data, f)
+        
+        loaded = self.mapper._load_checkpoint()
+        
+        self.assertIsNotNone(loaded)
+        self.assertEqual(loaded['total_coins'], 1000)
+        self.assertEqual(loaded['processed_coins'], 100)
+        self.assertEqual(len(loaded['processed_coin_ids']), 100)
+    
+    def test_load_checkpoint_invalid(self):
+        """Test loading an invalid checkpoint"""
+        # Create invalid checkpoint (missing required fields)
+        invalid_checkpoint = {
+            'status': 'in_progress',
+            'total_coins': 1000
+            # Missing required fields
+        }
+        
+        with open(self.checkpoint_file, 'w') as f:
+            json.dump(invalid_checkpoint, f)
+        
+        loaded = self.mapper._load_checkpoint()
+        self.assertIsNone(loaded)
+    
+    def test_load_checkpoint_expired(self):
+        """Test loading an expired checkpoint"""
+        # Create expired checkpoint
+        old_time = datetime.now() - timedelta(hours=25)  # Older than 24 hours
+        checkpoint_data = {
+            'status': 'in_progress',
+            'total_coins': 1000,
+            'processed_coins': 100,
+            'last_processed_index': 99,
+            'processed_coin_ids': [f'coin_{i}' for i in range(100)],
+            'failed_coin_ids': [],
+            'start_time': old_time.isoformat(),
+            'last_checkpoint_time': old_time.isoformat()
+        }
+        
+        with open(self.checkpoint_file, 'w') as f:
+            json.dump(checkpoint_data, f)
+        
+        loaded = self.mapper._load_checkpoint()
+        self.assertIsNone(loaded)
+    
+    def test_validate_checkpoint_valid(self):
+        """Test validating a valid checkpoint"""
+        valid_checkpoint = {
+            'status': 'in_progress',
+            'total_coins': 1000,
+            'processed_coins': 100,
+            'last_processed_index': 99,
+            'processed_coin_ids': [f'coin_{i}' for i in range(100)],
+            'failed_coin_ids': [],
+            'start_time': datetime.now().isoformat(),
+            'last_checkpoint_time': datetime.now().isoformat()
+        }
+        
+        self.assertTrue(self.mapper._validate_checkpoint(valid_checkpoint))
+    
+    def test_validate_checkpoint_missing_fields(self):
+        """Test validating checkpoint with missing required fields"""
+        invalid_checkpoint = {
+            'status': 'in_progress',
+            'total_coins': 1000
+            # Missing required fields
+        }
+        
+        self.assertFalse(self.mapper._validate_checkpoint(invalid_checkpoint))
+    
+    def test_validate_checkpoint_count_mismatch(self):
+        """Test validating checkpoint with count mismatch"""
+        invalid_checkpoint = {
+            'status': 'in_progress',
+            'total_coins': 1000,
+            'processed_coins': 100,  # Says 100 processed
+            'last_processed_index': 99,
+            'processed_coin_ids': ['coin_1', 'coin_2'],  # But only 2 IDs
+            'failed_coin_ids': [],
+            'start_time': datetime.now().isoformat(),
+            'last_checkpoint_time': datetime.now().isoformat()
+        }
+        
+        self.assertFalse(self.mapper._validate_checkpoint(invalid_checkpoint))
+    
+    def test_get_resume_point_no_checkpoint(self):
+        """Test getting resume point when no checkpoint exists"""
+        all_coins = [{'id': f'coin_{i}'} for i in range(10)]
+        
+        resume_idx, processed_ids, existing_mapping = self.mapper._get_resume_point(all_coins)
+        
+        self.assertEqual(resume_idx, 0)
+        self.assertEqual(processed_ids, [])
+        self.assertEqual(existing_mapping, {})
+    
+    def test_get_resume_point_with_checkpoint(self):
+        """Test getting resume point with existing checkpoint"""
+        # Create checkpoint
+        checkpoint_data = {
+            'status': 'in_progress',
+            'total_coins': 10,
+            'processed_coins': 5,
+            'last_processed_index': 4,
+            'processed_coin_ids': [f'coin_{i}' for i in range(5)],
+            'failed_coin_ids': [],
+            'start_time': datetime.now().isoformat(),
+            'last_checkpoint_time': datetime.now().isoformat()
+        }
+        
+        with open(self.checkpoint_file, 'w') as f:
+            json.dump(checkpoint_data, f)
+        
+        # Create partial cache
+        cache_data = {
+            'mapping': {'coin_0': {'exchange': 'kraken'}},
+            'last_update': datetime.now().isoformat(),
+            'exchange': 'kraken'
+        }
+        
+        with open(self.cache_file, 'w') as f:
+            json.dump(cache_data, f)
+        
+        all_coins = [{'id': f'coin_{i}'} for i in range(10)]
+        
+        resume_idx, processed_ids, existing_mapping = self.mapper._get_resume_point(all_coins)
+        
+        self.assertEqual(resume_idx, 5)  # Should resume from index 5
+        self.assertEqual(len(processed_ids), 5)
+        self.assertEqual(existing_mapping, {'coin_0': {'exchange': 'kraken'}})
+    
+    def test_clear_checkpoint(self):
+        """Test clearing checkpoint file"""
+        # Create checkpoint file
+        with open(self.checkpoint_file, 'w') as f:
+            json.dump({'test': 'data'}, f)
+        
+        self.assertTrue(os.path.exists(self.checkpoint_file))
+        
+        result = self.mapper._clear_checkpoint()
+        
+        self.assertTrue(result)
+        self.assertFalse(os.path.exists(self.checkpoint_file))
+    
+    def test_update_incremental_cache(self):
+        """Test updating the incremental cache"""
+        mapping_data = {'bitcoin': {'exchange': 'kraken'}}
+        
+        result = self.mapper._update_incremental_cache(mapping_data)
+        
+        self.assertTrue(result)
+        self.assertTrue(os.path.exists(self.cache_file))
+        
+        # Verify cache content
+        with open(self.cache_file, 'r') as f:
+            cache_data = json.load(f)
+        
+        self.assertEqual(cache_data['mapping'], mapping_data)
+        self.assertEqual(cache_data['exchange'], 'kraken')
+        self.assertTrue(cache_data['partial_update'])
+
+
+class TestKrakenMapperBasic(unittest.TestCase):
+    """Test cases for basic KrakenMapper functionality"""
+    
+    def setUp(self):
+        """Set up test fixtures"""
+        # Create mock configuration
+        self.mock_config = Mock(spec=ConfigurationManager)
+        self.mock_config.get.return_value = 'test_value'
+        self.mock_config.getint.return_value = 100
+        self.mock_config.getboolean.return_value = True
+        self.mock_config.getfloat.return_value = 1.5
+        
+        # Create mapper instance
+        self.mapper = KrakenMapper(self.mock_config)
     
     def test_get_exchange_name(self):
         """Test that mapper returns correct exchange name"""
         self.assertEqual(self.mapper.get_exchange_name(), "kraken")
     
-    def test_initialize_static_mappings(self):
-        """Test that static mappings are properly initialized"""
-        self.assertIn('bitcoin', self.mapper.static_mappings)
-        self.assertIn('ethereum', self.mapper.static_mappings)
-        self.assertEqual(self.mapper.static_mappings['bitcoin']['kraken_symbol'], 'XXBT')
-        self.assertEqual(self.mapper.static_mappings['ethereum']['kraken_symbol'], 'XETH')
-    
-    def test_check_for_existing_checkpoint_no_file(self):
-        """Test checking for checkpoint when no file exists"""
-        # Ensure checkpoint file doesn't exist
-        if self.mapper.checkpoint_file.exists():
-            self.mapper.checkpoint_file.unlink()
-        
-        result = self.mapper.check_for_existing_checkpoint()
-        
-        self.assertFalse(result)
-    
-    def test_check_for_existing_checkpoint_valid(self):
-        """Test checking for valid checkpoint"""
-        # Create valid checkpoint file
-        checkpoint_data = {
-            "version": "1.0",
-            "timestamp": datetime.now().isoformat(),
-            "processed_coins": ["bitcoin", "ethereum"],
-            "failed_coins": ["failed-coin"],
-            "mappings": {"bitcoin": {"kraken_symbol": "XXBT"}},
-            "exchange_data": {"XXBT": {"altname": "XBT"}},
-            "current_batch": 2,
-            "total_batches": 5,
-            "api_call_count": 10
+    @patch('requests.get')
+    def test_load_exchange_data_success(self, mock_get):
+        """Test successful loading of exchange data"""
+        # Mock API responses
+        assets_response = Mock()
+        assets_response.json.return_value = {
+            'error': [],
+            'result': {'XXBT': {'altname': 'XBT'}}
         }
         
-        with open(self.mapper.checkpoint_file, 'w') as f:
-            json.dump(checkpoint_data, f)
+        pairs_response = Mock()
+        pairs_response.json.return_value = {
+            'error': [],
+            'result': {'XXBTZUSD': {'base': 'XXBT', 'quote': 'ZUSD'}}
+        }
         
-        result = self.mapper.check_for_existing_checkpoint()
+        mock_get.side_effect = [assets_response, pairs_response]
+        
+        result = self.mapper.load_exchange_data()
         
         self.assertTrue(result)
-        self.assertEqual(len(self.mapper.checkpoint_data.processed_coins), 2)
-        self.assertEqual(len(self.mapper.checkpoint_data.failed_coins), 1)
-        self.assertEqual(self.mapper.checkpoint_data.api_call_count, 10)
+        self.assertIn('XXBT', self.mapper.assets)
+        self.assertIn('XXBTZUSD', self.mapper.asset_pairs)
     
-    def test_check_for_existing_checkpoint_expired(self):
-        """Test checking for expired checkpoint"""
-        # Create expired checkpoint file
-        old_time = datetime.now() - timedelta(hours=30)  # Older than max_checkpoint_age_hours
-        checkpoint_data = {
-            "version": "1.0",
-            "timestamp": old_time.isoformat(),
-            "processed_coins": ["bitcoin"],
-            "failed_coins": [],
-            "mappings": {},
-            "exchange_data": {},
-            "current_batch": 0,
-            "total_batches": 0,
-            "api_call_count": 0
+    @patch('requests.get')
+    def test_load_exchange_data_api_error(self, mock_get):
+        """Test loading exchange data when API returns error"""
+        error_response = Mock()
+        error_response.json.return_value = {
+            'error': ['API Error'],
+            'result': {}
         }
         
-        with open(self.mapper.checkpoint_file, 'w') as f:
-            json.dump(checkpoint_data, f)
+        mock_get.return_value = error_response
         
-        result = self.mapper.check_for_existing_checkpoint()
+        result = self.mapper.load_exchange_data()
         
         self.assertFalse(result)
-        self.assertFalse(self.mapper.checkpoint_file.exists())  # Should be cleaned up
     
-    def test_check_for_existing_checkpoint_invalid_json(self):
-        """Test checking for checkpoint with invalid JSON"""
-        # Create invalid JSON file
-        with open(self.mapper.checkpoint_file, 'w') as f:
-            f.write("invalid json content")
+    def test_map_coin_to_exchange_cached(self):
+        """Test mapping coin to exchange using cached data"""
+        # Set up cached mapping
+        self.mapper.mapping_cache = {
+            'bitcoin': {
+                'exchange_name': 'kraken',
+                'symbol': 'BTCUSD',
+                'pair_name': 'XXBTZUSD',
+                'base_currency': 'BTC',
+                'target_currency': 'USD'
+            }
+        }
         
-        result = self.mapper.check_for_existing_checkpoint()
+        result = self.mapper.map_coin_to_exchange('bitcoin')
+        
+        self.assertIsNotNone(result)
+        self.assertEqual(result.exchange_name, 'kraken')
+        self.assertEqual(result.pair_name, 'XXBTZUSD')
+    
+    def test_map_coin_to_exchange_not_found(self):
+        """Test mapping coin to exchange when coin not found"""
+        self.mapper.mapping_cache = {}
+        
+        result = self.mapper.map_coin_to_exchange('unknown_coin')
+        
+        self.assertIsNone(result)
+    
+    def test_is_tradeable_true(self):
+        """Test is_tradeable returns True for cached coin"""
+        self.mapper.mapping_cache = {'bitcoin': {'exchange': 'kraken'}}
+        
+        result = self.mapper.is_tradeable('bitcoin')
+        
+        self.assertTrue(result)
+    
+    def test_is_tradeable_false(self):
+        """Test is_tradeable returns False for non-cached coin"""
+        self.mapper.mapping_cache = {}
+        
+        result = self.mapper.is_tradeable('unknown_coin')
         
         self.assertFalse(result)
-        self.assertFalse(self.mapper.checkpoint_file.exists())  # Should be cleaned up
     
-    def test_save_checkpoint_force(self):
-        """Test forced checkpoint save"""
-        # Set some data
-        self.mapper.checkpoint_data.processed_coins = ["bitcoin", "ethereum"]
-        self.mapper.checkpoint_data.api_call_count = 5
-        
-        self.mapper.save_checkpoint(force=True)
-        
-        self.assertTrue(self.mapper.checkpoint_file.exists())
-        
-        # Verify saved data
-        with open(self.mapper.checkpoint_file, 'r') as f:
-            saved_data = json.load(f)
-        
-        self.assertEqual(len(saved_data['processed_coins']), 2)
-        self.assertEqual(saved_data['api_call_count'], 5)
-        self.assertIn('timestamp', saved_data)
-    
-    def test_save_checkpoint_interval(self):
-        """Test checkpoint save based on interval"""
-        # Set checkpoint interval
-        self.mapper.checkpoint_interval = 2
-        
-        # Should not save with 1 processed coin
-        self.mapper.checkpoint_data.processed_coins = ["bitcoin"]
-        self.mapper.save_checkpoint()
-        self.assertFalse(self.mapper.checkpoint_file.exists())
-        
-        # Should save with 2 processed coins
-        self.mapper.checkpoint_data.processed_coins = ["bitcoin", "ethereum"]
-        self.mapper.save_checkpoint()
-        self.assertTrue(self.mapper.checkpoint_file.exists())
-    
-    def test_cleanup_checkpoint(self):
-        """Test checkpoint cleanup"""
-        # Create checkpoint file
-        self.mapper.save_checkpoint(force=True)
-        self.assertTrue(self.mapper.checkpoint_file.exists())
-        
-        # Cleanup
-        self.mapper._cleanup_checkpoint()
-        self.assertFalse(self.mapper.checkpoint_file.exists())
-    
-    @patch('requests.get')
-    def test_make_api_call_success(self, mock_get):
-        """Test successful API call"""
-        # Mock successful response
-        mock_response = Mock()
-        mock_response.raise_for_status.return_value = None
-        mock_response.json.return_value = {"result": {"test": "data"}}
-        mock_get.return_value = mock_response
-        
-        initial_count = self.mapper.checkpoint_data.api_call_count
-        
-        with patch('time.sleep'):  # Skip actual sleep
-            result = self.mapper._make_api_call("https://test.com")
-        
-        self.assertIsNotNone(result)
-        self.assertEqual(result, {"result": {"test": "data"}})
-        self.assertEqual(self.mapper.checkpoint_data.api_call_count, initial_count + 1)
-        self.assertIsNotNone(self.mapper.checkpoint_data.last_api_call)
-    
-    @patch('requests.get')
-    @patch('time.sleep')
-    def test_make_api_call_with_retries(self, mock_sleep, mock_get):
-        """Test API call with retries"""
-        # Mock failed then successful response
-        mock_response_fail = Mock()
-        mock_response_fail.raise_for_status.side_effect = Exception("Connection error")
-        
-        mock_response_success = Mock()
-        mock_response_success.raise_for_status.return_value = None
-        mock_response_success.json.return_value = {"result": "success"}
-        
-        mock_get.side_effect = [mock_response_fail, mock_response_success]
-        
-        result = self.mapper._make_api_call("https://test.com", max_retries=2)
-        
-        self.assertIsNotNone(result)
-        self.assertEqual(result, {"result": "success"})
-        self.assertEqual(mock_get.call_count, 2)
-        mock_sleep.assert_called()
-    
-    @patch('requests.get')
-    @patch('time.sleep')
-    def test_make_api_call_all_retries_fail(self, mock_sleep, mock_get):
-        """Test API call when all retries fail"""
-        # Mock all responses to fail
-        mock_response = Mock()
-        mock_response.raise_for_status.side_effect = Exception("Connection error")
-        mock_get.return_value = mock_response
-        
-        result = self.mapper._make_api_call("https://test.com", max_retries=2)
-        
-        self.assertIsNone(result)
-        self.assertEqual(mock_get.call_count, 3)  # Initial + 2 retries
-    
-    def test_get_kraken_assets_cached(self):
-        """Test getting Kraken assets from cache"""
-        # Set cached exchange data
-        cached_data = {"XXBT": {"altname": "XBT"}, "XETH": {"altname": "ETH"}}
-        self.mapper.checkpoint_data.exchange_data = cached_data
-        
-        result = self.mapper._get_kraken_assets()
-        
-        self.assertEqual(result, cached_data)
-    
-    @patch.object(KrakenMapper, '_make_api_call')
-    def test_get_kraken_assets_api_call(self, mock_api_call):
-        """Test getting Kraken assets via API call"""
-        # Mock API response
-        api_response = {
-            "result": {
-                "XXBT": {"altname": "XBT", "decimals": 10},
-                "XETH": {"altname": "ETH", "decimals": 10}
+    def test_get_symbol_mapping_found(self):
+        """Test getting symbol mapping when mapping exists"""
+        self.mapper.mapping_cache = {
+            'bitcoin': {
+                'exchange_name': 'kraken',
+                'symbol': 'BTCUSD',
+                'pair_name': 'XXBTZUSD',
+                'base_currency': 'BTC',
+                'target_currency': 'USD'
             }
         }
-        mock_api_call.return_value = api_response
         
-        result = self.mapper._get_kraken_assets()
+        result = self.mapper.get_symbol_mapping('bitcoin')
         
-        self.assertEqual(result, api_response["result"])
-        self.assertEqual(self.mapper.checkpoint_data.exchange_data, api_response["result"])
-        mock_api_call.assert_called_once()
+        self.assertEqual(result, 'XXBTZUSD')
     
-    @patch.object(KrakenMapper, '_make_api_call')
-    def test_get_kraken_assets_api_failure(self, mock_api_call):
-        """Test getting Kraken assets when API fails"""
-        mock_api_call.return_value = None
+    def test_get_symbol_mapping_not_found(self):
+        """Test getting symbol mapping when mapping doesn't exist"""
+        self.mapper.mapping_cache = {}
         
-        result = self.mapper._get_kraken_assets()
-        
-        self.assertEqual(result, {})
-    
-    @patch.object(KrakenMapper, '_make_api_call')
-    def test_get_kraken_ticker_pairs_success(self, mock_api_call):
-        """Test getting Kraken ticker pairs successfully"""
-        api_response = {
-            "result": {
-                "XXBTZUSD": {"base": "XXBT", "quote": "ZUSD"},
-                "XETHZUSD": {"base": "XETH", "quote": "ZUSD"}
-            }
-        }
-        mock_api_call.return_value = api_response
-        
-        result = self.mapper._get_kraken_ticker_pairs()
-        
-        self.assertEqual(result, api_response["result"])
-        mock_api_call.assert_called_once()
-    
-    @patch.object(KrakenMapper, '_make_api_call')
-    def test_get_coingecko_exchanges_data_success(self, mock_api_call):
-        """Test getting CoinGecko exchange data successfully"""
-        api_response = {
-            "tickers": [
-                {
-                    "base": "BTC",
-                    "target": "USD", 
-                    "market": {"identifier": "kraken"},
-                    "trade_url": "https://trade.kraken.com"
-                },
-                {
-                    "base": "BTC",
-                    "target": "EUR",
-                    "market": {"identifier": "binance"}
-                }
-            ]
-        }
-        mock_api_call.return_value = api_response
-        
-        result = self.mapper._get_coingecko_exchanges_data("bitcoin")
-        
-        self.assertEqual(len(result), 1)  # Only Kraken ticker should be returned
-        self.assertEqual(result[0]["base"], "BTC")
-        self.assertEqual(result[0]["market"]["identifier"], "kraken")
-    
-    def test_create_mapping_for_coin_already_processed(self):
-        """Test creating mapping for already processed coin"""
-        # Add coin to processed list
-        self.mapper.checkpoint_data.processed_coins = ["bitcoin"]
-        self.mapper.checkpoint_data.mappings = {"bitcoin": {"kraken_symbol": "XXBT"}}
-        
-        result = self.mapper._create_mapping_for_coin("bitcoin", {"name": "Bitcoin"})
-        
-        self.assertEqual(result, {"kraken_symbol": "XXBT"})
-    
-    def test_create_mapping_for_coin_failed_before(self):
-        """Test creating mapping for previously failed coin"""
-        # Add coin to failed list
-        self.mapper.checkpoint_data.failed_coins = ["failed-coin"]
-        
-        result = self.mapper._create_mapping_for_coin("failed-coin", {"name": "Failed Coin"})
+        result = self.mapper.get_symbol_mapping('unknown_coin')
         
         self.assertIsNone(result)
-    
-    def test_create_mapping_for_coin_static_mapping(self):
-        """Test creating mapping using static mappings"""
-        coin_data = {"name": "Bitcoin", "symbol": "btc"}
-        
-        result = self.mapper._create_mapping_for_coin("bitcoin", coin_data)
-        
-        self.assertIsNotNone(result)
-        self.assertEqual(result["kraken_symbol"], "XXBT")
-        self.assertEqual(result["mapping_source"], "static")
-        self.assertEqual(result["confidence"], "high")
-        self.assertIn("bitcoin", self.mapper.checkpoint_data.processed_coins)
-    
-    @patch.object(KrakenMapper, '_get_coingecko_exchanges_data')
-    def test_create_mapping_for_coin_api_mapping(self, mock_get_exchange_data):
-        """Test creating mapping using API data"""
-        # Mock CoinGecko exchange data
-        mock_get_exchange_data.return_value = [
-            {
-                "base": "ADA",
-                "target": "USD",
-                "market": {"identifier": "kraken"}
-            }
-        ]
-        
-        coin_data = {"name": "Cardano", "symbol": "ada"}
-        
-        result = self.mapper._create_mapping_for_coin("cardano", coin_data)
-        
-        self.assertIsNotNone(result)
-        self.assertEqual(result["kraken_symbol"], "ADA")
-        self.assertEqual(result["base_currency"], "ADA")
-        self.assertEqual(result["target_currency"], "USD")
-        self.assertEqual(result["mapping_source"], "api")
-        self.assertEqual(result["confidence"], "medium")
-        self.assertIn("cardano", self.mapper.checkpoint_data.processed_coins)
-    
-    @patch.object(KrakenMapper, '_get_coingecko_exchanges_data')
-    @patch.object(KrakenMapper, '_get_kraken_assets')
-    def test_create_mapping_for_coin_symbol_match(self, mock_get_assets, mock_get_exchange_data):
-        """Test creating mapping using symbol matching"""
-        # Mock no exchange data from CoinGecko
-        mock_get_exchange_data.return_value = None
-        
-        # Mock Kraken assets
-        mock_get_assets.return_value = {
-            "MATIC": {"altname": "MATIC", "decimals": 10}
-        }
-        
-        coin_data = {"name": "Polygon", "symbol": "matic"}
-        
-        result = self.mapper._create_mapping_for_coin("polygon", coin_data)
-        
-        self.assertIsNotNone(result)
-        self.assertEqual(result["kraken_symbol"], "MATIC")
-        self.assertEqual(result["mapping_source"], "symbol_match")
-        self.assertEqual(result["confidence"], "low")
-        self.assertIn("polygon", self.mapper.checkpoint_data.processed_coins)
-    
-    @patch.object(KrakenMapper, '_get_coingecko_exchanges_data')
-    @patch.object(KrakenMapper, '_get_kraken_assets')
-    def test_create_mapping_for_coin_no_mapping(self, mock_get_assets, mock_get_exchange_data):
-        """Test creating mapping when no mapping can be found"""
-        # Mock no data from any source
-        mock_get_exchange_data.return_value = None
-        mock_get_assets.return_value = {}
-        
-        coin_data = {"name": "Unknown Coin", "symbol": "unknown"}
-        
-        result = self.mapper._create_mapping_for_coin("unknown-coin", coin_data)
-        
-        self.assertIsNone(result)
-        self.assertIn("unknown-coin", self.mapper.checkpoint_data.failed_coins)
-    
-    def test_create_mapping_for_coin_exception(self):
-        """Test creating mapping when exception occurs"""
-        # Pass invalid coin data to trigger exception
-        with patch.object(self.mapper, '_get_coingecko_exchanges_data', side_effect=Exception("API Error")):
-            result = self.mapper._create_mapping_for_coin("error-coin", {"name": "Error Coin"})
-        
-        self.assertIsNone(result)
-        self.assertIn("error-coin", self.mapper.checkpoint_data.failed_coins)
-    
-    @patch.object(KrakenMapper, '_get_kraken_assets')
-    def test_build_coin_mapping_fresh_start(self, mock_get_assets):
-        """Test building coin mapping from fresh start"""
-        mock_get_assets.return_value = {"XXBT": {"altname": "XBT"}}
-        
-        coin_data = [
-            {"id": "bitcoin", "name": "Bitcoin", "symbol": "btc"},
-            {"id": "ethereum", "name": "Ethereum", "symbol": "eth"}
-        ]
-        
-        with patch.object(self.mapper, '_create_mapping_for_coin') as mock_create:
-            mock_create.side_effect = [
-                {"kraken_symbol": "XXBT", "mapping_source": "static"},
-                {"kraken_symbol": "XETH", "mapping_source": "static"}
-            ]
-            
-            result = self.mapper.build_coin_mapping(coin_data)
-        
-        self.assertEqual(len(result), 2)
-        self.assertEqual(mock_create.call_count, 2)
-    
-    def test_build_coin_mapping_resume_from_checkpoint(self):
-        """Test building coin mapping resuming from checkpoint"""
-        # Create existing checkpoint
-        checkpoint_data = {
-            "version": "1.0",
-            "timestamp": datetime.now().isoformat(),
-            "processed_coins": ["bitcoin"],
-            "failed_coins": [],
-            "mappings": {"bitcoin": {"kraken_symbol": "XXBT"}},
-            "exchange_data": {"XXBT": {"altname": "XBT"}},
-            "current_batch": 1,
-            "total_batches": 2,
-            "api_call_count": 5
-        }
-        
-        with open(self.mapper.checkpoint_file, 'w') as f:
-            json.dump(checkpoint_data, f)
-        
-        coin_data = [
-            {"id": "bitcoin", "name": "Bitcoin", "symbol": "btc"},
-            {"id": "ethereum", "name": "Ethereum", "symbol": "eth"}
-        ]
-        
-        with patch.object(self.mapper, '_create_mapping_for_coin') as mock_create:
-            mock_create.return_value = {"kraken_symbol": "XETH", "mapping_source": "static"}
-            
-            result = self.mapper.build_coin_mapping(coin_data)
-        
-        # Should resume and only process ethereum (bitcoin already processed)
-        self.assertEqual(len(result), 2)  # Both mappings should be present
-        self.assertEqual(mock_create.call_count, 1)  # Only ethereum processed
-    
-    @patch.object(KrakenMapper, 'build_coin_mapping')
-    def test_map_coins_to_exchange(self, mock_build_mapping):
-        """Test mapping coins to exchange format"""
-        # Mock mapping results
-        mock_build_mapping.return_value = {
-            "bitcoin": {"kraken_symbol": "XXBT", "mapping_source": "static"},
-            "ethereum": {"kraken_symbol": "XETH", "mapping_source": "static"}
-        }
-        
-        coin_data = [
-            {"id": "bitcoin", "name": "Bitcoin", "symbol": "btc"},
-            {"id": "ethereum", "name": "Ethereum", "symbol": "eth"},
-            {"id": "dogecoin", "name": "Dogecoin", "symbol": "doge"}  # Not in mappings
-        ]
-        
-        result = self.mapper.map_coins_to_exchange(coin_data)
-        
-        self.assertEqual(len(result), 3)
-        
-        # Check mapped coins
-        bitcoin_coin = next(coin for coin in result if coin["id"] == "bitcoin")
-        self.assertTrue(bitcoin_coin["is_tradeable_on_kraken"])
-        self.assertIsNotNone(bitcoin_coin["kraken_data"])
-        
-        # Check unmapped coin
-        dogecoin_coin = next(coin for coin in result if coin["id"] == "dogecoin")
-        self.assertFalse(dogecoin_coin["is_tradeable_on_kraken"])
-        self.assertIsNone(dogecoin_coin["kraken_data"])
-    
-    def test_get_exchange_info(self):
-        """Test getting exchange information"""
-        result = self.mapper.get_exchange_info()
-        
-        self.assertEqual(result["name"], "Kraken")
-        self.assertEqual(result["identifier"], "kraken")
-        self.assertIn("checkpoint_support", result)
-        self.assertTrue(result["checkpoint_support"])
-        self.assertIn("supported_features", result)
-    
-    @patch.object(KrakenMapper, '_get_kraken_assets')
-    def test_validate_mappings_all_valid(self, mock_get_assets):
-        """Test validating mappings when all are valid"""
-        mock_get_assets.return_value = {
-            "XXBT": {"altname": "XBT"},
-            "XETH": {"altname": "ETH"}
-        }
-        
-        mappings = {
-            "bitcoin": {"base_currency": "XBT"},
-            "ethereum": {"base_currency": "ETH"}
-        }
-        
-        result = self.mapper.validate_mappings(mappings)
-        
-        self.assertEqual(result["valid"], 2)
-        self.assertEqual(result["invalid"], 0)
-        self.assertEqual(len(result["errors"]), 0)
-    
-    @patch.object(KrakenMapper, '_get_kraken_assets')
-    def test_validate_mappings_some_invalid(self, mock_get_assets):
-        """Test validating mappings when some are invalid"""
-        mock_get_assets.return_value = {
-            "XXBT": {"altname": "XBT"}
-        }
-        
-        mappings = {
-            "bitcoin": {"base_currency": "XBT"},
-            "ethereum": {"base_currency": "ETH"}  # ETH not in Kraken assets
-        }
-        
-        result = self.mapper.validate_mappings(mappings)
-        
-        self.assertEqual(result["valid"], 1)
-        self.assertEqual(result["invalid"], 1)
-        self.assertEqual(len(result["errors"]), 1)
-        self.assertIn("ethereum", result["errors"][0])
-    
-    @patch.object(KrakenMapper, '_get_kraken_assets')
-    def test_validate_mappings_api_failure(self, mock_get_assets):
-        """Test validating mappings when API fails"""
-        mock_get_assets.side_effect = Exception("API Error")
-        
-        mappings = {"bitcoin": {"base_currency": "XBT"}}
-        
-        result = self.mapper.validate_mappings(mappings)
-        
-        self.assertEqual(len(result["errors"]), 1)
-        self.assertIn("Failed to fetch Kraken data", result["errors"][0])
-    
-    def test_get_checkpoint_status_no_checkpoint(self):
-        """Test getting checkpoint status when no checkpoint exists"""
-        result = self.mapper.get_checkpoint_status()
-        
-        self.assertFalse(result["checkpoint_exists"])
-        self.assertEqual(result["processed_coins"], 0)
-        self.assertEqual(result["failed_coins"], 0)
-        self.assertEqual(result["successful_mappings"], 0)
-        self.assertEqual(result["api_calls_made"], 0)
-    
-    def test_get_checkpoint_status_with_checkpoint(self):
-        """Test getting checkpoint status with existing checkpoint"""
-        # Set checkpoint data
-        self.mapper.checkpoint_data.processed_coins = ["bitcoin", "ethereum"]
-        self.mapper.checkpoint_data.failed_coins = ["failed-coin"]
-        self.mapper.checkpoint_data.mappings = {"bitcoin": {"kraken_symbol": "XXBT"}}
-        self.mapper.checkpoint_data.current_batch = 3
-        self.mapper.checkpoint_data.total_batches = 10
-        self.mapper.checkpoint_data.api_call_count = 25
-        self.mapper.checkpoint_data.timestamp = "2023-01-01T12:00:00"
-        self.mapper.checkpoint_data.last_api_call = "2023-01-01T12:30:00"
-        
-        # Save checkpoint to create file
-        self.mapper.save_checkpoint(force=True)
-        
-        result = self.mapper.get_checkpoint_status()
-        
-        self.assertTrue(result["checkpoint_exists"])
-        self.assertEqual(result["processed_coins"], 2)
-        self.assertEqual(result["failed_coins"], 1)
-        self.assertEqual(result["successful_mappings"], 1)
-        self.assertEqual(result["current_batch"], 3)
-        self.assertEqual(result["total_batches"], 10)
-        self.assertEqual(result["api_calls_made"], 25)
-        self.assertEqual(result["last_checkpoint"], "2023-01-01T12:00:00")
-        self.assertEqual(result["last_api_call"], "2023-01-01T12:30:00")
 
 
 class TestKrakenMapperIntegration(unittest.TestCase):
-    """Integration tests for KrakenMapper"""
+    """Integration tests for KrakenMapper with checkpoint/resume"""
     
     def setUp(self):
         """Set up test fixtures"""
         self.temp_dir = tempfile.mkdtemp()
         
-        # Create real configuration
-        config_content = f"""
-[MAPPING]
-mapping_file = {self.temp_dir}/kraken_mapping.json
-cache_expiry_hours = 24
-rebuild_mapping_days = 7
-
-[IMPORT]
-rate_limit_delay = 0.1
-"""
+        # Create mock configuration
+        self.mock_config = Mock(spec=ConfigurationManager)
+        self.mock_config.get.side_effect = self._mock_config_get
+        self.mock_config.getint.return_value = 2  # Small checkpoint frequency for testing
+        self.mock_config.getboolean.return_value = True
+        self.mock_config.getfloat.return_value = 0.1  # Fast rate limiting for tests
         
-        config_path = os.path.join(self.temp_dir, "config.ini")
-        with open(config_path, 'w') as f:
-            f.write(config_content)
+        self.checkpoint_file = os.path.join(self.temp_dir, "integration_checkpoint.json")
+        self.cache_file = os.path.join(self.temp_dir, "integration_cache.json")
         
-        from core.configuration_manager import ConfigurationManager
-        self.config = ConfigurationManager(config_path)
-        
-        self.mapper = KrakenMapper(self.config)
-        self.mapper.checkpoint_dir = Path(self.temp_dir)
-        self.mapper.checkpoint_file = self.mapper.checkpoint_dir / "integration_checkpoint.json"
-        self.mapper.api_delay = 0.1  # Speed up tests
+        # Create mapper instance
+        self.mapper = KrakenMapper(self.mock_config)
+        self.mapper.checkpoint_file = self.checkpoint_file
+        self.mapper.cache_file = self.cache_file
     
     def tearDown(self):
         """Clean up test fixtures"""
-        # Clean up files
+        # Clean up temp files
         for file in os.listdir(self.temp_dir):
             file_path = os.path.join(self.temp_dir, file)
             if os.path.isfile(file_path):
                 os.remove(file_path)
-        os.rmdir(self.temp_dir)
+        
+        try:
+            os.rmdir(self.temp_dir)
+        except OSError:
+            pass
     
-    def test_checkpoint_persistence_across_instances(self):
-        """Test that checkpoint data persists across mapper instances"""
-        # Set up first mapper instance with some data
-        mapper1 = KrakenMapper(self.config)
-        mapper1.checkpoint_dir = Path(self.temp_dir)
-        mapper1.checkpoint_file = self.mapper.checkpoint_file
-        
-        mapper1.checkpoint_data.processed_coins = ["bitcoin", "ethereum"]
-        mapper1.checkpoint_data.api_call_count = 10
-        mapper1.save_checkpoint(force=True)
-        
-        # Create second mapper instance
-        mapper2 = KrakenMapper(self.config)
-        mapper2.checkpoint_dir = Path(self.temp_dir)
-        mapper2.checkpoint_file = self.mapper.checkpoint_file
-        
-        # Load checkpoint
-        result = mapper2.check_for_existing_checkpoint()
-        
-        self.assertTrue(result)
-        self.assertEqual(len(mapper2.checkpoint_data.processed_coins), 2)
-        self.assertEqual(mapper2.checkpoint_data.api_call_count, 10)
+    def _mock_config_get(self, section, key, fallback=None):
+        """Mock configuration getter"""
+        config_values = {
+            ('MAPPING', 'mapping_file'): self.cache_file,
+            ('MAPPING', 'checkpoint_file'): self.checkpoint_file,
+            ('IMPORT', 'rate_limit_delay'): '0.1'
+        }
+        return config_values.get((section, key), fallback or '')
     
-    @patch.object(KrakenMapper, '_make_api_call')
-    def test_batch_processing_with_checkpoints(self, mock_api_call):
-        """Test batch processing with checkpoint saves"""
-        # Mock API responses
-        mock_api_call.return_value = {"result": {"XXBT": {"altname": "XBT"}}}
+    @patch.object(KrakenMapper, 'load_exchange_data')
+    @patch.object(KrakenMapper, '_extract_kraken_info')
+    def test_build_coin_mapping_with_checkpoints(self, mock_extract, mock_load_exchange):
+        """Test building coin mapping with checkpoint saves"""
+        # Mock successful exchange data loading
+        mock_load_exchange.return_value = True
         
-        # Create test coin data
-        coin_data = [
-            {"id": f"coin-{i}", "name": f"Coin {i}", "symbol": f"c{i}"}
-            for i in range(10)
+        # Mock data provider
+        mock_provider = Mock()
+        mock_provider.get_all_coins.return_value = [
+            {'id': 'bitcoin', 'name': 'Bitcoin'},
+            {'id': 'ethereum', 'name': 'Ethereum'},
+            {'id': 'cardano', 'name': 'Cardano'},
+            {'id': 'polkadot', 'name': 'Polkadot'}
         ]
         
-        # Set small checkpoint interval for testing
-        self.mapper.checkpoint_interval = 3
+        def mock_get_exchange_data(coin_id):
+            # Return mock exchange data for some coins
+            if coin_id in ['bitcoin', 'ethereum']:
+                return {'tickers': [{'base': coin_id.upper()[:3], 'target': 'USD'}]}
+            return None
         
-        # Mock the mapping creation to avoid actual API calls
-        def mock_create_mapping(coin_id, coin_data):
-            self.mapper.checkpoint_data.processed_coins.append(coin_id)
-            self.mapper.checkpoint_data.mappings[coin_id] = {
-                "kraken_symbol": f"MOCK_{coin_id.upper()}",
-                "mapping_source": "test"
-            }
-            return self.mapper.checkpoint_data.mappings[coin_id]
+        mock_provider.get_exchange_data = mock_get_exchange_data
         
-        with patch.object(self.mapper, '_create_mapping_for_coin', side_effect=mock_create_mapping):
-            result = self.mapper.build_coin_mapping(coin_data)
+        # Mock kraken info extraction
+        def mock_extract_side_effect(exchange_data):
+            if exchange_data:
+                return {
+                    'exchange_name': 'kraken',
+                    'symbol': 'MOCK',
+                    'pair_name': 'MOCKUSD',
+                    'base_currency': 'MOCK',
+                    'target_currency': 'USD'
+                }
+            return None
         
-        # Verify all coins were processed
-        self.assertEqual(len(result), 10)
-        self.assertEqual(len(self.mapper.checkpoint_data.processed_coins), 10)
+        mock_extract.side_effect = mock_extract_side_effect
         
-        # Verify checkpoint was created and cleaned up
-        self.assertFalse(self.mapper.checkpoint_file.exists())  # Should be cleaned up after completion
-    
-    def test_error_handling_and_recovery(self):
-        """Test error handling and recovery capabilities"""
-        coin_data = [
-            {"id": "bitcoin", "name": "Bitcoin", "symbol": "btc"},
-            {"id": "error-coin", "name": "Error Coin", "symbol": "error"},
-            {"id": "ethereum", "name": "Ethereum", "symbol": "eth"}
-        ]
+        # Run the mapping build
+        with patch('time.sleep'):  # Skip actual sleep
+            result = self.mapper._build_coin_mapping(mock_provider)
         
-        def mock_create_mapping(coin_id, coin_data):
-            if coin_id == "error-coin":
-                raise Exception("Simulated API error")
-            
-            self.mapper.checkpoint_data.processed_coins.append(coin_id)
-            mapping = {"kraken_symbol": f"MOCK_{coin_id.upper()}", "mapping_source": "test"}
-            self.mapper.checkpoint_data.mappings[coin_id] = mapping
-            return mapping
-        
-        with patch.object(self.mapper, '_get_kraken_assets', return_value={}):
-            with patch.object(self.mapper, '_create_mapping_for_coin', side_effect=mock_create_mapping):
-                result = self.mapper.build_coin_mapping(coin_data)
-        
-        # Should have processed 2 coins successfully, 1 failed
+        # Verify results
+        self.assertIsInstance(result, dict)
+        # Should have created mappings for bitcoin and ethereum
         self.assertEqual(len(result), 2)
-        self.assertEqual(len(self.mapper.checkpoint_data.processed_coins), 2)
-        self.assertEqual(len(self.mapper.checkpoint_data.failed_coins), 1)
-        self.assertIn("error-coin", self.mapper.checkpoint_data.failed_coins)
+        
+        # Verify checkpoint was cleaned up (since process completed)
+        self.assertFalse(os.path.exists(self.checkpoint_file))
     
-    def test_interrupt_and_resume_simulation(self):
-        """Test simulated interrupt and resume functionality"""
-        coin_data = [
-            {"id": f"coin-{i}", "name": f"Coin {i}", "symbol": f"c{i}"}
-            for i in range(10)
+    @patch.object(KrakenMapper, 'load_exchange_data')
+    @patch.object(KrakenMapper, '_extract_kraken_info')
+    def test_build_coin_mapping_resume_from_checkpoint(self, mock_extract, mock_load_exchange):
+        """Test resuming coin mapping from checkpoint"""
+        # Create existing checkpoint
+        checkpoint_data = {
+            'status': 'in_progress',
+            'total_coins': 4,
+            'processed_coins': 2,
+            'last_processed_index': 1,
+            'processed_coin_ids': ['bitcoin', 'ethereum'],
+            'failed_coin_ids': [],
+            'start_time': datetime.now().isoformat(),
+            'last_checkpoint_time': datetime.now().isoformat(),
+            'batch_size': 50,
+            'checkpoint_frequency': 2
+        }
+        
+        with open(self.checkpoint_file, 'w') as f:
+            json.dump(checkpoint_data, f)
+        
+        # Create existing partial cache
+        cache_data = {
+            'mapping': {
+                'bitcoin': {
+                    'exchange_name': 'kraken',
+                    'symbol': 'BTCUSD',
+                    'pair_name': 'XXBTZUSD'
+                }
+            },
+            'last_update': datetime.now().isoformat(),
+            'exchange': 'kraken',
+            'partial_update': True
+        }
+        
+        with open(self.cache_file, 'w') as f:
+            json.dump(cache_data, f)
+        
+        # Mock successful exchange data loading
+        mock_load_exchange.return_value = True
+        
+        # Mock data provider
+        mock_provider = Mock()
+        mock_provider.get_all_coins.return_value = [
+            {'id': 'bitcoin', 'name': 'Bitcoin'},      # Already processed
+            {'id': 'ethereum', 'name': 'Ethereum'},    # Already processed
+            {'id': 'cardano', 'name': 'Cardano'},      # Will be processed
+            {'id': 'polkadot', 'name': 'Polkadot'}     # Will be processed
         ]
         
-        # First run: process half the coins then "interrupt"
-        self.mapper.checkpoint_interval = 2
+        def mock_get_exchange_data(coin_id):
+            if coin_id in ['cardano', 'polkadot']:
+                return {'tickers': [{'base': coin_id.upper()[:3], 'target': 'USD'}]}
+            return None
         
-        def mock_create_mapping_interrupt(coin_id, coin_data):
-            self.mapper.checkpoint_data.processed_coins.append(coin_id)
-            mapping = {"kraken_symbol": f"MOCK_{coin_id.upper()}", "mapping_source": "test"}
-            self.mapper.checkpoint_data.mappings[coin_id] = mapping
-            
-            # Simulate interrupt after processing 5 coins
-            if len(self.mapper.checkpoint_data.processed_coins) == 5:
-                self.mapper.save_checkpoint(force=True)
+        mock_provider.get_exchange_data = mock_get_exchange_data
+        
+        # Mock kraken info extraction
+        def mock_extract_side_effect(exchange_data):
+            if exchange_data:
+                return {
+                    'exchange_name': 'kraken',
+                    'symbol': 'MOCK',
+                    'pair_name': 'MOCKUSD',
+                    'base_currency': 'MOCK',
+                    'target_currency': 'USD'
+                }
+            return None
+        
+        mock_extract.side_effect = mock_extract_side_effect
+        
+        # Run the mapping build (should resume)
+        with patch('time.sleep'):  # Skip actual sleep
+            result = self.mapper._build_coin_mapping(mock_provider)
+        
+        # Verify results
+        self.assertIsInstance(result, dict)
+        # Should have mappings for bitcoin (from cache) + cardano, polkadot (newly processed)
+        self.assertEqual(len(result), 3)
+        self.assertIn('bitcoin', result)  # From existing cache
+        self.assertIn('cardano', result)   # Newly processed
+        self.assertIn('polkadot', result)  # Newly processed
+        
+        # Verify checkpoint was cleaned up after completion
+        self.assertFalse(os.path.exists(self.checkpoint_file))
+    
+    @patch.object(KrakenMapper, 'load_exchange_data')
+    def test_build_coin_mapping_interrupt_handling(self, mock_load_exchange):
+        """Test handling of KeyboardInterrupt during mapping build"""
+        # Mock successful exchange data loading
+        mock_load_exchange.return_value = True
+        
+        # Mock data provider
+        mock_provider = Mock()
+        mock_provider.get_all_coins.return_value = [
+            {'id': 'bitcoin', 'name': 'Bitcoin'},
+            {'id': 'ethereum', 'name': 'Ethereum'},
+            {'id': 'cardano', 'name': 'Cardano'}
+        ]
+        
+        # Mock get_exchange_data to raise KeyboardInterrupt after first coin
+        call_count = 0
+        def mock_get_exchange_data(coin_id):
+            nonlocal call_count
+            call_count += 1
+            if call_count > 1:
                 raise KeyboardInterrupt("Simulated interrupt")
-            
-            return mapping
+            return {'tickers': [{'base': coin_id.upper()[:3], 'target': 'USD'}]}
         
-        with patch.object(self.mapper, '_get_kraken_assets', return_value={}):
-            with patch.object(self.mapper, '_create_mapping_for_coin', side_effect=mock_create_mapping_interrupt):
-                with self.assertRaises(KeyboardInterrupt):
-                    self.mapper.build_coin_mapping(coin_data)
+        mock_provider.get_exchange_data = mock_get_exchange_data
         
-        # Verify checkpoint was saved
-        self.assertTrue(self.mapper.checkpoint_file.exists())
-        self.assertEqual(len(self.mapper.checkpoint_data.processed_coins), 5)
+        # Run the mapping build (should be interrupted)
+        with patch('time.sleep'):  # Skip actual sleep
+            with self.assertRaises(KeyboardInterrupt):
+                self.mapper._build_coin_mapping(mock_provider)
         
-        # Second run: resume from checkpoint
-        mapper2 = KrakenMapper(self.config)
-        mapper2.checkpoint_dir = Path(self.temp_dir)
-        mapper2.checkpoint_file = self.mapper.checkpoint_file
+        # Verify checkpoint was saved before interrupt
+        self.assertTrue(os.path.exists(self.checkpoint_file))
         
-        def mock_create_mapping_resume(coin_id, coin_data):
-            mapper2.checkpoint_data.processed_coins.append(coin_id)
-            mapping = {"kraken_symbol": f"MOCK_{coin_id.upper()}", "mapping_source": "test"}
-            mapper2.checkpoint_data.mappings[coin_id] = mapping
-            return mapping
+        with open(self.checkpoint_file, 'r') as f:
+            checkpoint_data = json.load(f)
         
-        with patch.object(mapper2, '_get_kraken_assets', return_value={}):
-            with patch.object(mapper2, '_create_mapping_for_coin', side_effect=mock_create_mapping_resume):
-                result = mapper2.build_coin_mapping(coin_data)
-        
-        # Should have processed all 10 coins (5 from checkpoint + 5 new)
-        self.assertEqual(len(result), 10)
-        self.assertEqual(len(mapper2.checkpoint_data.processed_coins), 10)
-        
-        # Checkpoint should be cleaned up after completion
-        self.assertFalse(mapper2.checkpoint_file.exists())
+        self.assertEqual(checkpoint_data['status'], 'in_progress')
+        self.assertGreater(len(checkpoint_data['processed_coin_ids']), 0)
 
 
 if __name__ == '__main__':

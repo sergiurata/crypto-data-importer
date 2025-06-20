@@ -8,6 +8,8 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass
 import logging
 import sys
+import time
+import requests
 from pathlib import Path
 
 # Add src to path

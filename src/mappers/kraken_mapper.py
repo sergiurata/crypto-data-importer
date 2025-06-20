@@ -8,7 +8,7 @@ import os
 import requests
 import time
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 import logging
 import sys
 from pathlib import Path
@@ -36,6 +36,12 @@ class KrakenMapper(AbstractExchangeMapper):
         # Cache settings
         self.cache_file = self.config.get('MAPPING', 'mapping_file', 'kraken_mapping.json')
         self.cache_expiry_hours = self.config.getint('MAPPING', 'cache_expiry_hours', 24)
+        
+        # Checkpoint settings
+        self.checkpoint_enabled = self.config.getboolean('MAPPING', 'checkpoint_enabled', True)
+        self.checkpoint_frequency = self.config.getint('MAPPING', 'checkpoint_frequency', 100)
+        self.resume_on_restart = self.config.getboolean('MAPPING', 'resume_on_restart', True)
+        self.checkpoint_file = self.config.get('MAPPING', 'checkpoint_file', 'kraken_mapping_checkpoint.json')
     
     def get_exchange_name(self) -> str:
         """Get the name of this exchange"""
@@ -112,52 +118,102 @@ class KrakenMapper(AbstractExchangeMapper):
         return exchange_info.pair_name if exchange_info else None
     
     def _build_coin_mapping(self, data_provider: AbstractDataProvider) -> Dict:
-        """Build mapping between CoinGecko IDs and Kraken data using CoinGecko API"""
-        mapping = {}
-        
+        """Build mapping between CoinGecko IDs and Kraken data using CoinGecko API with checkpoint/resume support"""
         try:
             # Get all coins from CoinGecko
             all_coins = data_provider.get_all_coins()
+            total_coins = len(all_coins)
             
-            mapped_count = 0
+            # Check if we should resume from checkpoint
+            if self._should_resume():
+                resume_index, processed_coin_ids, mapping = self._get_resume_point(all_coins)
+                failed_coin_ids = []
+                start_time = None  # Will be loaded from checkpoint
+                logger.info(f"Resuming mapping process from coin {resume_index + 1}/{total_coins}")
+            else:
+                resume_index = 0
+                processed_coin_ids = []
+                mapping = {}
+                failed_coin_ids = []
+                start_time = datetime.now()
+                logger.info(f"Starting fresh mapping process for {total_coins} coins")
+            
+            mapped_count = len(mapping)
             batch_size = 50
             
-            for i in range(0, len(all_coins), batch_size):
-                batch = all_coins[i:i + batch_size]
+            # Process coins starting from resume point
+            for i in range(resume_index, total_coins):
+                coin = all_coins[i]
+                coin_id = coin['id']
                 
-                for coin in batch:
-                    coin_id = coin['id']
+                # Skip if already processed (shouldn't happen with proper resume logic, but safety check)
+                if coin_id in processed_coin_ids:
+                    continue
+                
+                try:
+                    # Get exchange data for this coin
+                    exchange_data = data_provider.get_exchange_data(coin_id)
                     
-                    try:
-                        # Get exchange data for this coin
-                        exchange_data = data_provider.get_exchange_data(coin_id)
-                        
-                        if exchange_data:
-                            kraken_info = self._extract_kraken_info(exchange_data)
-                            if kraken_info:
-                                mapping[coin_id] = kraken_info
-                                mapped_count += 1
-                        
-                        # Rate limiting
-                        time.sleep(self.config.getfloat('IMPORT', 'rate_limit_delay', 1.5))
-                        
-                    except Exception as e:
-                        logger.debug(f"Failed to process {coin_id}: {e}")
-                        continue
+                    if exchange_data:
+                        kraken_info = self._extract_kraken_info(exchange_data)
+                        if kraken_info:
+                            mapping[coin_id] = kraken_info
+                            mapped_count += 1
+                    
+                    # Add to processed list
+                    processed_coin_ids.append(coin_id)
+                    
+                    # Rate limiting
+                    time.sleep(self.config.getfloat('IMPORT', 'rate_limit_delay', 1.5))
+                    
+                except Exception as e:
+                    logger.debug(f"Failed to process {coin_id}: {e}")
+                    failed_coin_ids.append(coin_id)
+                    processed_coin_ids.append(coin_id)  # Still mark as processed to avoid retry
+                    continue
                 
-                logger.info(f"Processed {min(i + batch_size, len(all_coins))}/{len(all_coins)} coins")
+                # Progress reporting
+                if (i + 1) % 10 == 0 or i == total_coins - 1:
+                    progress_pct = ((i + 1) / total_coins) * 100
+                    logger.info(f"Processed {i + 1}/{total_coins} coins ({progress_pct:.1f}%) - {mapped_count} mapped")
+                
+                # Save checkpoint periodically
+                if self.checkpoint_enabled and (i + 1) % self.checkpoint_frequency == 0:
+                    logger.info(f"Saving checkpoint at coin {i + 1}/{total_coins}")
+                    self._save_checkpoint(i, total_coins, processed_coin_ids, mapping, failed_coin_ids, start_time)
+                    
+                    # Update cache incrementally
+                    self._update_incremental_cache(mapping)
             
-            logger.info(f"Built Kraken mapping for {mapped_count} coins")
+            # Final processing complete
+            logger.info(f"Built Kraken mapping for {mapped_count} coins ({len(failed_coin_ids)} failed)")
             self.last_update = datetime.now()
             
-            # Save to cache
+            # Save final cache (remove partial_update flag)
             self._save_mapping_cache(mapping)
+            
+            # Clear checkpoint since we're done
+            self._clear_checkpoint()
             
             return mapping
             
+        except KeyboardInterrupt:
+            logger.info("Mapping process interrupted by user")
+            # Save checkpoint before exiting
+            if self.checkpoint_enabled and 'i' in locals():
+                logger.info("Saving checkpoint before exit...")
+                self._save_checkpoint(i, total_coins, processed_coin_ids, mapping, failed_coin_ids, start_time)
+                self._update_incremental_cache(mapping)
+            raise
+            
         except Exception as e:
             logger.error(f"Failed to build Kraken mapping: {e}")
-            return {}
+            # Save checkpoint on error
+            if self.checkpoint_enabled and 'i' in locals():
+                logger.info("Saving checkpoint due to error...")
+                self._save_checkpoint(i, total_coins, processed_coin_ids, mapping, failed_coin_ids, start_time)
+                self._update_incremental_cache(mapping)
+            return mapping if 'mapping' in locals() else {}
     
     def _extract_kraken_info(self, exchange_data: Dict) -> Optional[Dict]:
         """Extract Kraken information from CoinGecko exchange data"""
@@ -327,3 +383,165 @@ class KrakenMapper(AbstractExchangeMapper):
                 pairs.append(pair_name)
         
         return pairs
+    
+    # Checkpoint/Resume functionality methods
+    
+    def _save_checkpoint(self, processed_index: int, total_coins: int, processed_coin_ids: List[str], 
+                        mapping_data: Dict, failed_coin_ids: List[str] = None, start_time: datetime = None) -> bool:
+        """Save current mapping progress to checkpoint file"""
+        if not self.checkpoint_enabled:
+            return True
+            
+        try:
+            checkpoint_data = {
+                'status': 'in_progress',
+                'total_coins': total_coins,
+                'processed_coins': len(processed_coin_ids),
+                'last_processed_index': processed_index,
+                'processed_coin_ids': processed_coin_ids,
+                'failed_coin_ids': failed_coin_ids or [],
+                'start_time': start_time.isoformat() if start_time else datetime.now().isoformat(),
+                'last_checkpoint_time': datetime.now().isoformat(),
+                'batch_size': 50,  # Current batch size from _build_coin_mapping
+                'checkpoint_frequency': self.checkpoint_frequency,
+                'mapping_file': self.cache_file,
+                'partial_mapping_count': len(mapping_data)
+            }
+            
+            with open(self.checkpoint_file, 'w') as f:
+                json.dump(checkpoint_data, f, indent=2)
+            
+            logger.debug(f"Checkpoint saved: {processed_index + 1}/{total_coins} coins processed")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to save checkpoint: {e}")
+            return False
+    
+    def _load_checkpoint(self) -> Optional[Dict]:
+        """Load checkpoint data from file"""
+        if not self.checkpoint_enabled or not os.path.exists(self.checkpoint_file):
+            return None
+            
+        try:
+            with open(self.checkpoint_file, 'r') as f:
+                checkpoint_data = json.load(f)
+            
+            if self._validate_checkpoint(checkpoint_data):
+                logger.info(f"Loaded checkpoint: {checkpoint_data['processed_coins']}/{checkpoint_data['total_coins']} coins processed")
+                return checkpoint_data
+            else:
+                logger.warning("Checkpoint validation failed, starting fresh")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Failed to load checkpoint: {e}")
+            return None
+    
+    def _clear_checkpoint(self) -> bool:
+        """Remove checkpoint file when mapping is complete"""
+        try:
+            if os.path.exists(self.checkpoint_file):
+                os.remove(self.checkpoint_file)
+                logger.info("Checkpoint file cleared")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to clear checkpoint: {e}")
+            return False
+    
+    def _validate_checkpoint(self, checkpoint_data: Dict) -> bool:
+        """Validate checkpoint data structure and integrity"""
+        try:
+            required_fields = [
+                'status', 'total_coins', 'processed_coins', 'last_processed_index',
+                'processed_coin_ids', 'start_time', 'last_checkpoint_time'
+            ]
+            
+            # Check required fields exist
+            for field in required_fields:
+                if field not in checkpoint_data:
+                    logger.warning(f"Checkpoint missing required field: {field}")
+                    return False
+            
+            # Validate data types and ranges
+            if not isinstance(checkpoint_data['processed_coin_ids'], list):
+                logger.warning("Checkpoint processed_coin_ids is not a list")
+                return False
+            
+            if checkpoint_data['processed_coins'] != len(checkpoint_data['processed_coin_ids']):
+                logger.warning("Checkpoint processed_coins count mismatch")
+                return False
+            
+            if checkpoint_data['last_processed_index'] < 0:
+                logger.warning("Checkpoint has invalid processed index")
+                return False
+            
+            # Check if checkpoint is not too old (24 hours)
+            try:
+                checkpoint_time = datetime.fromisoformat(checkpoint_data['last_checkpoint_time'])
+                age_hours = (datetime.now() - checkpoint_time).total_seconds() / 3600
+                if age_hours > 24:
+                    logger.warning(f"Checkpoint is too old ({age_hours:.1f} hours)")
+                    return False
+            except ValueError:
+                logger.warning("Checkpoint has invalid timestamp")
+                return False
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error validating checkpoint: {e}")
+            return False
+    
+    def _should_resume(self) -> bool:
+        """Determine if we should resume from checkpoint"""
+        if not self.checkpoint_enabled or not self.resume_on_restart:
+            return False
+        
+        checkpoint_data = self._load_checkpoint()
+        return checkpoint_data is not None and checkpoint_data.get('status') == 'in_progress'
+    
+    def _get_resume_point(self, all_coins: List[Dict]) -> Tuple[int, List[str], Dict]:
+        """Get resume point information from checkpoint
+        
+        Returns:
+            Tuple of (resume_index, processed_coin_ids, existing_mapping)
+        """
+        checkpoint_data = self._load_checkpoint()
+        if not checkpoint_data:
+            return 0, [], {}
+        
+        resume_index = checkpoint_data.get('last_processed_index', 0) + 1
+        processed_coin_ids = checkpoint_data.get('processed_coin_ids', [])
+        
+        # Load existing partial mapping from cache if it exists
+        existing_mapping = {}
+        if os.path.exists(self.cache_file):
+            try:
+                with open(self.cache_file, 'r') as f:
+                    cache_data = json.load(f)
+                    existing_mapping = cache_data.get('mapping', {})
+            except Exception as e:
+                logger.debug(f"Could not load partial mapping: {e}")
+        
+        logger.info(f"Resuming from index {resume_index}, {len(processed_coin_ids)} coins already processed")
+        return resume_index, processed_coin_ids, existing_mapping
+    
+    def _update_incremental_cache(self, mapping_data: Dict) -> bool:
+        """Update the main cache file incrementally during mapping process"""
+        try:
+            cache_data = {
+                'mapping': mapping_data,
+                'last_update': datetime.now().isoformat(),
+                'exchange': self.exchange_name,
+                'partial_update': True  # Flag to indicate this is a partial update
+            }
+            
+            with open(self.cache_file, 'w') as f:
+                json.dump(cache_data, f, indent=2)
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to update incremental cache: {e}")
+            return False

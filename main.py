@@ -85,7 +85,7 @@ def main():
         try:
             if 'orchestrator' in locals():
                 orchestrator.cleanup()
-        except:
+        except Exception as e1:
             pass
 
 

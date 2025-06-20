@@ -5,9 +5,11 @@ Test cases for UpdateScheduler
 import unittest
 import tempfile
 import os
+import sys
 import json
 import threading
 import time
+from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime, timedelta
 
@@ -235,7 +237,7 @@ class TestUpdateScheduler(unittest.TestCase):
         result = self.scheduler.update_specific_symbols(symbols, update_func, "extra_arg")
         
         self.assertTrue(result)
-        update_func.assert_called_once_with(symbols=symbols, "extra_arg")
+        update_func.assert_called_once_with("extra_arg", symbols=symbols)
     
     def test_update_specific_symbols_failure(self):
         """Test update_specific_symbols when update fails"""
@@ -537,7 +539,7 @@ class TestUpdateSchedulerIntegration(unittest.TestCase):
         self.state_file = os.path.join(self.temp_dir, "integration_state.json")
         
         # Create real configuration
-        from configuration_manager import ConfigurationManager
+        from core.configuration_manager import ConfigurationManager
         
         config_content = f"""
 [UPDATES]

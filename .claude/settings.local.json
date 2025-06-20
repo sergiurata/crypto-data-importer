@@ -3,7 +3,8 @@
     "allow": [
       "Bash(python3:*)",
       "Bash(grep:*)",
-      "Bash(python -m pytest tests/test_providers/test_coingecko_provider.py -v)"
+      "Bash(python -m pytest tests/test_providers/test_coingecko_provider.py -v)",
+      "Bash(python -m pytest tests/test_schedulers/test_update_scheduler.py -v)"
     ],
     "deny": []
   }

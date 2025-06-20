@@ -44,15 +44,20 @@ class TestLoggingManager(unittest.TestCase):
     
     def tearDown(self):
         """Clean up test fixtures"""
+        # Clear handlers first to release file handles
+        root_logger = logging.getLogger()
+        for handler in root_logger.handlers[:]:
+            handler.close()
+            root_logger.removeHandler(handler)
+        
         # Remove log file if exists
         if os.path.exists(self.test_log_file):
             os.remove(self.test_log_file)
-        os.rmdir(self.temp_dir)
         
-        # Clear handlers again
-        root_logger = logging.getLogger()
-        for handler in root_logger.handlers[:]:
-            root_logger.removeHandler(handler)
+        # Clean up any remaining files in temp directory
+        import shutil
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
     
     def test_init_creates_logging_manager(self):
         """Test that LoggingManager initializes correctly"""
@@ -141,18 +146,20 @@ class TestLoggingManager(unittest.TestCase):
         }.get((section, key), fallback)
         
         # Should not raise exception, just log warning
-        with patch('logging_manager.logging') as mock_logging:
-            logging_manager = LoggingManager(self.mock_config)
-            
-            # Should have console handler only
-            root_logger = logging.getLogger()
-            console_handlers = [h for h in root_logger.handlers 
-                              if isinstance(h, logging.StreamHandler)]
-            self.assertGreater(len(console_handlers), 0)
+        logging_manager = LoggingManager(self.mock_config)
+        
+        # Should have console handler only (file handler creation should fail)
+        root_logger = logging.getLogger()
+        console_handlers = [h for h in root_logger.handlers 
+                          if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.handlers.RotatingFileHandler)]
+        self.assertGreater(len(console_handlers), 0)
         
         # Cleanup
-        os.chmod(readonly_dir, 0o755)
-        os.rmdir(readonly_dir)
+        try:
+            os.chmod(readonly_dir, 0o755)
+            os.rmdir(readonly_dir)
+        except OSError:
+            pass  # Directory might not exist or be accessible
     
     def test_get_logger_new(self):
         """Test getting a new logger"""
@@ -176,30 +183,26 @@ class TestLoggingManager(unittest.TestCase):
     
     def test_rotate_logs_success(self):
         """Test successful log rotation"""
-        # Setup file logging
-        self.mock_config.get.side_effect = lambda section, key, fallback="": {
-            ('LOGGING', 'log_level'): 'INFO',
-            ('LOGGING', 'log_file'): self.test_log_file
-        }.get((section, key), fallback)
-        
         logging_manager = LoggingManager(self.mock_config)
         
-        # Mock the rotating file handler
-        with patch('logging.handlers.RotatingFileHandler') as mock_handler_class:
-            mock_handler = MagicMock()
-            mock_handler_class.return_value = mock_handler
-            
-            # Create new logging manager to get mocked handler
-            logging_manager = LoggingManager(self.mock_config)
-            
-            # Add the mock handler to root logger
-            root_logger = logging.getLogger()
-            root_logger.addHandler(mock_handler)
-            
-            result = logging_manager.rotate_logs()
-            
-            self.assertTrue(result)
-            mock_handler.doRollover.assert_called_once()
+        # Create actual RotatingFileHandler
+        mock_handler = logging.handlers.RotatingFileHandler(
+            filename=self.test_log_file,
+            maxBytes=1024,
+            backupCount=1
+        )
+        
+        # Mock doRollover to track calls
+        mock_handler.doRollover = MagicMock()
+        
+        # Add the handler to root logger
+        root_logger = logging.getLogger()
+        root_logger.addHandler(mock_handler)
+        
+        result = logging_manager.rotate_logs()
+        
+        self.assertTrue(result)
+        mock_handler.doRollover.assert_called_once()
     
     def test_rotate_logs_no_rotating_handlers(self):
         """Test log rotation when no rotating handlers exist"""
@@ -219,9 +222,15 @@ class TestLoggingManager(unittest.TestCase):
         """Test log rotation handles exceptions"""
         logging_manager = LoggingManager(self.mock_config)
         
-        # Mock handler that raises exception
-        mock_handler = MagicMock()
-        mock_handler.doRollover.side_effect = Exception("Rotation failed")
+        # Create actual RotatingFileHandler that will raise exception
+        mock_handler = logging.handlers.RotatingFileHandler(
+            filename=self.test_log_file,
+            maxBytes=1024,
+            backupCount=1
+        )
+        
+        # Mock doRollover to raise exception
+        mock_handler.doRollover = MagicMock(side_effect=Exception("Rotation failed"))
         
         root_logger = logging.getLogger()
         root_logger.addHandler(mock_handler)
@@ -409,25 +418,20 @@ class TestLoggingManagerIntegration(unittest.TestCase):
     
     def tearDown(self):
         """Clean up test fixtures"""
-        if os.path.exists(self.config_path):
-            os.remove(self.config_path)
-        
-        # Clean up any log files
-        for file in os.listdir(self.temp_dir):
-            file_path = os.path.join(self.temp_dir, file)
-            if os.path.isfile(file_path):
-                os.remove(file_path)
-        
-        os.rmdir(self.temp_dir)
-        
-        # Clear handlers
+        # Clear handlers first to release file handles
         root_logger = logging.getLogger()
         for handler in root_logger.handlers[:]:
+            handler.close()
             root_logger.removeHandler(handler)
+        
+        # Clean up temp directory
+        import shutil
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
     
     def test_integration_with_configuration_manager(self):
         """Test integration with actual ConfigurationManager"""
-        from configuration_manager import ConfigurationManager
+        from core.configuration_manager import ConfigurationManager
         
         # Create test configuration file
         config_content = """

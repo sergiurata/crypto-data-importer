@@ -200,13 +200,15 @@ database_path = /test/path/test.adb
         fallback_bool = config_manager.getboolean('NONEXISTENT', 'nonexistent_key', True)
         self.assertTrue(fallback_bool)
     
-    @patch('builtins.open', side_effect=IOError("Permission denied"))
-    def test_save_config_failure(self, mock_open):
+    def test_save_config_failure(self):
         """Test handling of save configuration failure"""
+        # Create config manager first
         config_manager = ConfigurationManager(self.test_config_path)
         
-        # This should not raise an exception
-        config_manager.save_config()
+        # Then patch just the save_config method to simulate failure
+        with patch('builtins.open', side_effect=IOError("Permission denied")):
+            # This should not raise an exception
+            config_manager.save_config()
     
     def test_print_config(self):
         """Test print_config method"""

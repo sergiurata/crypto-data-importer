@@ -242,3 +242,7 @@ python3 -m unittest tests.test_mappers.test_kraken_mapper.TestKrakenMapperIntegr
 # Test all KrakenMapper functionality
 python3 -m unittest tests.test_mappers.test_kraken_mapper -v
 ```
+
+## Memories
+
+- To memorize

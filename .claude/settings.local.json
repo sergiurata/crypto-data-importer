@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(grep:*)",
+      "Bash(python -m pytest tests/test_providers/test_coingecko_provider.py -v)"
     ],
     "deny": []
   }

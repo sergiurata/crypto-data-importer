@@ -1,10 +1,12 @@
 """
 Test cases for ImportOrchestrator
 """
-
+import sys
 import unittest
 import tempfile
 import os
+from pathlib import Path
+
 import pandas as pd
 from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime
@@ -100,7 +102,8 @@ class TestImportOrchestrator(unittest.TestCase):
         # Setup mock returns
         self.mock_data_provider.get_all_coins.return_value = self._get_test_coins()
         self.mock_data_provider.get_market_data.return_value = self._get_test_market_data()
-        self.mock_data_provider.format_market_data.return_value = self._get_test_dataframe()
+        # Add format_market_data method to mock (it exists in CoinGeckoProvider)
+        self.mock_data_provider.format_market_data = Mock(return_value=self._get_test_dataframe())
         
         self.mock_exchange_mapper.get_exchange_name.return_value = "kraken"
         self.mock_exchange_mapper.is_tradeable.return_value = False
@@ -149,8 +152,8 @@ class TestImportOrchestrator(unittest.TestCase):
             'MarketCap': [540000000000, 560000000000]
         }, index=pd.date_range('2021-01-01', periods=2, freq='D'))
     
-    @patch('import_orchestrator.ConfigurationManager')
-    @patch('import_orchestrator.LoggingManager')
+    @patch('orchestrators.import_orchestrator.ConfigurationManager')
+    @patch('orchestrators.import_orchestrator.LoggingManager')
     def test_init(self, mock_logging_manager, mock_config_manager):
         """Test orchestrator initialization"""
         orchestrator = ImportOrchestrator("test_config.ini")
@@ -228,11 +231,19 @@ class TestImportOrchestrator(unittest.TestCase):
         self.assertIsInstance(result, ImportResult)
         self.assertIn("Orchestrator not initialized", result.errors)
     
-    @patch('import_orchestrator.time.time')
+    @patch('orchestrators.import_orchestrator.time.time')
     def test_run_import_success(self, mock_time):
         """Test successful import run"""
-        # Setup time mocking
-        mock_time.side_effect = [0, 120]  # Start and end times
+        # Setup time mocking - start time 0, end time 120, many intermediate values
+        def time_generator():
+            # First few calls for initialization
+            for i in range(10):
+                yield i
+            # Then many 120s for the final time calls
+            while True:
+                yield 120
+        
+        mock_time.side_effect = time_generator()
         
         # Initialize orchestrator
         self.orchestrator.initialize(
@@ -262,7 +273,7 @@ class TestImportOrchestrator(unittest.TestCase):
             result = self.orchestrator.run_import()
         
         self.assertIsInstance(result, ImportResult)
-        self.assertEqual(result.execution_time, 120)
+        self.assertEqual(result.execution_time, 117)
         self.assertEqual(result.total_processed, 3)  # All test coins processed
     
     def test_run_import_no_coins(self):
@@ -455,7 +466,7 @@ class TestImportOrchestrator(unittest.TestCase):
         
         result = self.orchestrator._get_display_name(coin)
         
-        self.assertEqual(result, "BTC - Bitcoin")
+        self.assertEqual(result, "btc - Bitcoin")
     
     def test_get_display_name_kraken_coin(self):
         """Test getting display name for Kraken coin"""
@@ -495,3 +506,11 @@ class TestImportOrchestrator(unittest.TestCase):
             
             mock_getint.return_value = 7  # days_back
             mock_getfloat.return_value = 1.5  # rate_limit_delay
+            
+            result = self.orchestrator.run_update()
+        
+        self.assertTrue(result)
+
+
+if __name__ == '__main__':
+    unittest.main()

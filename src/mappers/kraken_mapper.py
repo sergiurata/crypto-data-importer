@@ -323,7 +323,25 @@ class KrakenMapper(AbstractExchangeMapper):
             with open(self.cache_file, 'r') as f:
                 cache_data = json.load(f)
             
-            self.mapping_cache = cache_data.get('mapping', {})
+            # CRITICAL FIX: Check if cache is marked as partial/incomplete
+            if cache_data.get('partial_update', False):
+                logger.info(f"Cache file marked as partial/incomplete - ignoring cache")
+                return False
+            
+            # Check if there's an active checkpoint indicating incomplete mapping
+            if self.checkpoint_enabled and os.path.exists(self.checkpoint_file):
+                checkpoint_data = self._load_checkpoint()
+                if checkpoint_data and checkpoint_data.get('status') == 'in_progress':
+                    logger.info(f"Active checkpoint detected - cache is incomplete, will resume mapping")
+                    return False
+            
+            # Check if cache has a reasonable number of entries (basic sanity check)
+            mapping_data = cache_data.get('mapping', {})
+            if len(mapping_data) < 10:  # Arbitrary threshold for "reasonable" cache
+                logger.info(f"Cache has too few entries ({len(mapping_data)}) - likely incomplete")
+                return False
+            
+            self.mapping_cache = mapping_data
             last_update_str = cache_data.get('last_update')
             
             if last_update_str:

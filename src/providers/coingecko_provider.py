@@ -65,7 +65,7 @@ class CoinGeckoProvider(AbstractDataProvider):
             return response.json()
         
         start_time = time.time()
-        result = self.retry_request(_make_request)
+        result = self.retry_request(_make_request, "coins/list")
         response_time = time.time() - start_time
         
         if result:
@@ -100,11 +100,11 @@ class CoinGeckoProvider(AbstractDataProvider):
                 
             return response.json()
         
+        endpoint = f"coins/{coin_id}/market_chart"
         start_time = time.time()
-        result = self.retry_request(_make_request)
+        result = self.retry_request(_make_request, endpoint)
         response_time = time.time() - start_time
         
-        endpoint = f"coins/{coin_id}/market_chart"
         if result:
             # Store in cache
             self._store_in_cache(cache_key, result)
@@ -141,11 +141,11 @@ class CoinGeckoProvider(AbstractDataProvider):
                 
             return response.json()
         
+        endpoint = f"coins/{coin_id}"
         start_time = time.time()
-        result = self.retry_request(_make_request)
+        result = self.retry_request(_make_request, endpoint)
         response_time = time.time() - start_time
         
-        endpoint = f"coins/{coin_id}"
         if result:
             # Store in cache
             self._store_in_cache(cache_key, result)
@@ -184,11 +184,11 @@ class CoinGeckoProvider(AbstractDataProvider):
                 
             return response.json()
         
+        endpoint = f"coins/{coin_id}/details"
         start_time = time.time()
-        result = self.retry_request(_make_request)
+        result = self.retry_request(_make_request, endpoint)
         response_time = time.time() - start_time
         
-        endpoint = f"coins/{coin_id}/details"
         if result:
             # Store in cache
             self._store_in_cache(cache_key, result)

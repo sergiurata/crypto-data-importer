@@ -278,8 +278,13 @@ class TestConfigurationManagerSecurity(unittest.TestCase):
         self.temp_dir.mkdir(exist_ok=True)
         self.safe_config_path = str(self.temp_dir / "safe_config.ini")
         
-        # Patch the allowed directories to prevent creating config/ directory during tests
-        self.original_sanitize = None
+        # Store original config.ini content to protect it during tests
+        config_ini_path = Path.cwd() / "config.ini"
+        self.original_config_exists = config_ini_path.exists()
+        if self.original_config_exists:
+            self.original_config_content = config_ini_path.read_text()
+        else:
+            self.original_config_content = None
         
     def tearDown(self):
         """Clean up test fixtures"""
@@ -353,6 +358,22 @@ class TestConfigurationManagerSecurity(unittest.TestCase):
                 remaining_files = list(config_dir.glob("*"))
                 if not remaining_files:
                     config_dir.rmdir()
+            except (OSError, PermissionError):
+                pass
+        
+        # Restore original config.ini if it was modified during tests
+        config_ini_path = Path.cwd() / "config.ini"
+        if self.original_config_exists and self.original_config_content:
+            try:
+                current_content = config_ini_path.read_text() if config_ini_path.exists() else ""
+                if current_content != self.original_config_content:
+                    config_ini_path.write_text(self.original_config_content)
+            except (OSError, PermissionError):
+                pass
+        elif not self.original_config_exists and config_ini_path.exists():
+            # Remove config.ini if it didn't exist before and was created during tests
+            try:
+                config_ini_path.unlink()
             except (OSError, PermissionError):
                 pass
     

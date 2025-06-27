@@ -631,6 +631,44 @@ class TestKrakenMapperIntegration(unittest.TestCase):
         
         self.assertEqual(checkpoint_data['status'], 'in_progress')
         self.assertGreater(len(checkpoint_data['processed_coin_ids']), 0)
+    
+    def test_retry_mechanism(self):
+        """Test the failed coin retry mechanism"""
+        # Test retry count tracking
+        self.mapper.retry_counts = {}
+        
+        # Test _get_retry_count method
+        self.assertEqual(self.mapper._get_retry_count('test_coin'), 0)
+        
+        # Test _update_retry_count method
+        self.mapper._update_retry_count('test_coin', 1)
+        self.assertEqual(self.mapper._get_retry_count('test_coin'), 1)
+        
+        # Test retry count from checkpoint data
+        checkpoint_data = {'retry_counts': {'test_coin2': 2}}
+        self.assertEqual(self.mapper._get_retry_count('test_coin2', checkpoint_data), 2)
+        
+        # Test checkpoint saving includes retry counts
+        self.mapper.retry_counts = {'failed_coin': 1, 'another_failed': 2}  
+        result = self.mapper._save_checkpoint(
+            processed_index=10,
+            total_coins=100,
+            processed_coin_ids=['coin1', 'coin2'],
+            mapping_data={'coin1': {'symbol': 'COIN1'}},
+            failed_coin_ids=['failed_coin'],
+            start_time=datetime.now()
+        )
+        
+        self.assertTrue(result)
+        self.assertTrue(os.path.exists(self.checkpoint_file))
+        
+        # Verify retry counts are saved in checkpoint
+        with open(self.checkpoint_file, 'r') as f:
+            checkpoint_data = json.load(f)
+        
+        self.assertIn('retry_counts', checkpoint_data)
+        self.assertEqual(checkpoint_data['retry_counts']['failed_coin'], 1)
+        self.assertEqual(checkpoint_data['retry_counts']['another_failed'], 2)
 
 
 if __name__ == '__main__':

@@ -42,6 +42,11 @@ class KrakenMapper(AbstractExchangeMapper):
         self.checkpoint_frequency = self.config.getint('MAPPING', 'checkpoint_frequency', 100)
         self.resume_on_restart = self.config.getboolean('MAPPING', 'resume_on_restart', True)
         self.checkpoint_file = self.config.get('MAPPING', 'checkpoint_file', 'kraken_mapping_checkpoint.json')
+        
+        # Retry settings
+        self.retry_failed_coins = self.config.getboolean('MAPPING', 'retry_failed_coins', True)
+        self.max_retry_attempts = self.config.getint('MAPPING', 'max_retry_attempts', 3)
+        self.retry_counts = {}  # Track retry attempts per coin
     
     def get_exchange_name(self) -> str:
         """Get the name of this exchange"""
@@ -126,15 +131,20 @@ class KrakenMapper(AbstractExchangeMapper):
             
             # Check if we should resume from checkpoint
             if self._should_resume():
+                checkpoint_data = self._load_checkpoint()
                 resume_index, processed_coin_ids, mapping = self._get_resume_point(all_coins)
-                failed_coin_ids = []
+                failed_coin_ids = checkpoint_data.get('failed_coin_ids', []) if checkpoint_data else []
+                self.retry_counts = checkpoint_data.get('retry_counts', {}) if checkpoint_data else {}
                 start_time = None  # Will be loaded from checkpoint
                 logger.info(f"Resuming mapping process from coin {resume_index + 1}/{total_coins}")
+                logger.info(f"Loaded {len(failed_coin_ids)} failed coins and {len(self.retry_counts)} retry counts from checkpoint")
             else:
+                checkpoint_data = None
                 resume_index = 0
                 processed_coin_ids = []
                 mapping = {}
                 failed_coin_ids = []
+                self.retry_counts = {}
                 start_time = datetime.now()
                 logger.info(f"Starting fresh mapping process for {total_coins} coins")
             
@@ -149,6 +159,23 @@ class KrakenMapper(AbstractExchangeMapper):
                 # Skip if already processed (shouldn't happen with proper resume logic, but safety check)
                 if coin_id in processed_coin_ids:
                     continue
+                
+                # Check if this coin previously failed and implement smart retry logic
+                if coin_id in failed_coin_ids:
+                    if self.retry_failed_coins:
+                        # Check retry attempts from checkpoint if available
+                        retry_count = self._get_retry_count(coin_id, checkpoint_data if 'checkpoint_data' in locals() else None)
+                        if retry_count < self.max_retry_attempts:
+                            logger.debug(f"Retrying previously failed coin: {coin_id} (attempt {retry_count + 1}/{self.max_retry_attempts})")
+                            failed_coin_ids.remove(coin_id)  # Remove from failed list to retry
+                        else:
+                            logger.debug(f"Coin {coin_id} exceeded max retry attempts ({self.max_retry_attempts}), permanently skipping")
+                            processed_coin_ids.append(coin_id)  # Mark as processed to skip permanently
+                            continue
+                    else:
+                        logger.debug(f"Retry disabled, skipping previously failed coin: {coin_id}")
+                        processed_coin_ids.append(coin_id)  # Mark as processed to skip permanently
+                        continue
                 
                 try:
                     # Get exchange data for this coin
@@ -168,18 +195,31 @@ class KrakenMapper(AbstractExchangeMapper):
                     
                 except Exception as e:
                     logger.debug(f"Failed to process {coin_id}: {e}")
-                    failed_coin_ids.append(coin_id)
-                    processed_coin_ids.append(coin_id)  # Still mark as processed to avoid retry
+                    # Track retry attempt
+                    retry_count = self._get_retry_count(coin_id, checkpoint_data if 'checkpoint_data' in locals() else None)
+                    self._update_retry_count(coin_id, retry_count + 1)
+                    
+                    if coin_id not in failed_coin_ids:
+                        failed_coin_ids.append(coin_id)
+                    
+                    # DO NOT mark as processed unless max retries exceeded
+                    if retry_count + 1 >= self.max_retry_attempts:
+                        logger.debug(f"Coin {coin_id} exceeded max retry attempts ({self.max_retry_attempts}), marking as processed")
+                        processed_coin_ids.append(coin_id)
+                    
                     continue
                 
-                # Progress reporting
-                if (i + 1) % 10 == 0 or i == total_coins - 1:
-                    progress_pct = ((i + 1) / total_coins) * 100
-                    logger.info(f"Processed {i + 1}/{total_coins} coins ({progress_pct:.1f}%) - {mapped_count} mapped")
+                # Progress reporting (based on coins attempted, not just processed)
+                attempted_count = i + 1
+                if attempted_count % 10 == 0 or attempted_count == total_coins:
+                    progress_pct = (attempted_count / total_coins) * 100
+                    successful_count = len(processed_coin_ids)
+                    failed_count = len(failed_coin_ids)
+                    logger.info(f"Attempted {attempted_count}/{total_coins} coins ({progress_pct:.1f}%) - {successful_count} processed, {failed_count} failed, {mapped_count} mapped")
                 
-                # Save checkpoint periodically
-                if self.checkpoint_enabled and (i + 1) % self.checkpoint_frequency == 0:
-                    logger.info(f"Saving checkpoint at coin {i + 1}/{total_coins}")
+                # Save checkpoint periodically (based on coins attempted)
+                if self.checkpoint_enabled and attempted_count % self.checkpoint_frequency == 0:
+                    logger.info(f"Saving checkpoint at coin {attempted_count}/{total_coins}")
                     self._save_checkpoint(i, total_coins, processed_coin_ids, mapping, failed_coin_ids, start_time)
                     
                     # Update cache incrementally
@@ -418,6 +458,7 @@ class KrakenMapper(AbstractExchangeMapper):
                 'last_processed_index': processed_index,
                 'processed_coin_ids': processed_coin_ids,
                 'failed_coin_ids': failed_coin_ids or [],
+                'retry_counts': self.retry_counts,
                 'start_time': start_time.isoformat() if start_time else datetime.now().isoformat(),
                 'last_checkpoint_time': datetime.now().isoformat(),
                 'batch_size': 50,  # Current batch size from _build_coin_mapping
@@ -563,3 +604,19 @@ class KrakenMapper(AbstractExchangeMapper):
         except Exception as e:
             logger.error(f"Failed to update incremental cache: {e}")
             return False
+    
+    def _get_retry_count(self, coin_id: str, checkpoint_data: Optional[Dict] = None) -> int:
+        """Get the current retry count for a coin"""
+        # First check in-memory retry counts
+        if coin_id in self.retry_counts:
+            return self.retry_counts[coin_id]
+        
+        # Check checkpoint data for retry counts
+        if checkpoint_data and 'retry_counts' in checkpoint_data:
+            return checkpoint_data['retry_counts'].get(coin_id, 0)
+        
+        return 0
+    
+    def _update_retry_count(self, coin_id: str, count: int) -> None:
+        """Update the retry count for a coin"""
+        self.retry_counts[coin_id] = count

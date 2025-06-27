@@ -1,17 +1,23 @@
 """
-Factory Classes for Dynamic Component Creation
-Implements the Factory Pattern for extensible component creation
+Factory Classes for Secure Component Creation
+Implements the Factory Pattern with security controls to prevent arbitrary code execution
+
+SECURITY NOTE: Dynamic loading is disabled by default to prevent CVE-001.
+Set CRYPTO_ALLOW_DYNAMIC_LOADING=true only in secure development environments.
 """
 
 from typing import Dict, Type, List, Optional
 import logging
 import importlib
-import sys
+import os
+import re
 from pathlib import Path
 
-# Add src to path
-src_path = Path(__file__).parent.parent.parent / "src"
-sys.path.insert(0, str(src_path))
+# SECURITY: Dynamic loading disabled by default to prevent arbitrary code execution
+ALLOW_DYNAMIC_LOADING = os.getenv('CRYPTO_ALLOW_DYNAMIC_LOADING', 'false').lower() == 'true'
+
+# SECURITY: Removed global sys.path manipulation to prevent environment pollution
+# Use proper relative imports instead
 
 from providers.abstract_data_provider import AbstractDataProvider
 from mappers.abstract_exchange_mapper import AbstractExchangeMapper
@@ -20,10 +26,92 @@ from adapters.abstract_database_adapter import AbstractDatabaseAdapter
 logger = logging.getLogger(__name__)
 
 
+class ModuleSecurityValidator:
+    """Security validator for module paths and class names"""
+    
+    # Whitelist of allowed module prefixes
+    ALLOWED_MODULE_PREFIXES = [
+        'providers.',
+        'mappers.',
+        'adapters.',
+    ]
+    
+    # Blacklist of dangerous patterns
+    DANGEROUS_PATTERNS = [
+        '..',          # Directory traversal
+        '/',           # Absolute paths
+        '\\',          # Windows paths
+        'os.',         # OS module access
+        'sys.',        # System module access
+        'subprocess.', # Process execution
+        'importlib.',  # Dynamic imports
+        '__',          # Dunder methods
+        'eval',        # Code evaluation
+        'exec',        # Code execution
+        'compile',     # Code compilation
+        'open',        # File operations
+    ]
+    
+    @classmethod
+    def validate_module_path(cls, module_path: str) -> bool:
+        """Validate module path against security policies"""
+        if not module_path or not isinstance(module_path, str):
+            return False
+        
+        # Check length to prevent DoS
+        if len(module_path) > 100:
+            return False
+        
+        # Check whitelist
+        if not any(module_path.startswith(prefix) for prefix in cls.ALLOWED_MODULE_PREFIXES):
+            return False
+        
+        # Check blacklist
+        if any(pattern in module_path for pattern in cls.DANGEROUS_PATTERNS):
+            return False
+        
+        # Validate characters (alphanumeric, dots, underscores only)
+        if not re.match(r'^[a-zA-Z0-9._]+$', module_path):
+            return False
+            
+        return True
+    
+    @classmethod
+    def validate_class_name(cls, class_name: str) -> bool:
+        """Validate class name against security policies"""
+        if not class_name or not isinstance(class_name, str):
+            return False
+        
+        # Check length
+        if len(class_name) > 50:
+            return False
+        
+        # Prevent dangerous class names
+        dangerous_classes = ['__import__', 'eval', 'exec', 'compile', 'open', 'input', 'raw_input']
+        if class_name in dangerous_classes:
+            return False
+        
+        # Check for dangerous patterns
+        if any(pattern in class_name for pattern in cls.DANGEROUS_PATTERNS):
+            return False
+            
+        # Validate format (must start with capital letter)
+        if not re.match(r'^[A-Z][a-zA-Z0-9_]*$', class_name):
+            return False
+            
+        return True
+
+
 class ProviderFactory:
-    """Factory for creating data provider instances"""
+    """Factory for creating data provider instances with security controls"""
     
     _providers: Dict[str, Type[AbstractDataProvider]] = {}
+    
+    @classmethod
+    def _validate_module_security(cls, module_path: str, class_name: str) -> bool:
+        """Validate module path and class name for security"""
+        return (ModuleSecurityValidator.validate_module_path(module_path) and 
+                ModuleSecurityValidator.validate_class_name(class_name))
     
     @classmethod
     def register_provider(cls, name: str, provider_class: Type[AbstractDataProvider]):
@@ -69,25 +157,40 @@ class ProviderFactory:
     
     @classmethod
     def load_provider_from_module(cls, name: str, module_path: str, class_name: str) -> bool:
-        """Dynamically load a provider from a module
+        """SECURITY: Dynamically load a provider from a module (DISABLED BY DEFAULT)
+        
+        This method is disabled by default to prevent arbitrary code execution (CVE-001).
+        Only enable in secure development environments with CRYPTO_ALLOW_DYNAMIC_LOADING=true.
         
         Args:
             name: Name to register the provider under
-            module_path: Path to the module
-            class_name: Name of the class in the module
+            module_path: Path to the module (must pass security validation)
+            class_name: Name of the class in the module (must pass security validation)
             
         Returns:
             True if loaded successfully, False otherwise
         """
+        # SECURITY: Dynamic loading disabled by default
+        if not ALLOW_DYNAMIC_LOADING:
+            logger.error("SECURITY: Dynamic module loading is disabled. Set CRYPTO_ALLOW_DYNAMIC_LOADING=true if needed.")
+            logger.warning(f"Blocked attempt to load provider from {module_path}.{class_name}")
+            return False
+        
+        # SECURITY: Validate module path and class name
+        if not cls._validate_module_security(module_path, class_name):
+            logger.error(f"SECURITY: Invalid module path or class name rejected: {module_path}.{class_name}")
+            return False
+        
         try:
             module = importlib.import_module(module_path)
             provider_class = getattr(module, class_name)
             
             if issubclass(provider_class, AbstractDataProvider):
                 cls.register_provider(name, provider_class)
+                logger.info(f"Successfully loaded provider {name} from {module_path}.{class_name}")
                 return True
             else:
-                logger.error(f"Class {class_name} is not a subclass of AbstractDataProvider")
+                logger.error(f"SECURITY: Class {class_name} is not a subclass of AbstractDataProvider")
                 return False
                 
         except Exception as e:
@@ -96,9 +199,15 @@ class ProviderFactory:
 
 
 class MapperFactory:
-    """Factory for creating exchange mapper instances"""
+    """Factory for creating exchange mapper instances with security controls"""
     
     _mappers: Dict[str, Type[AbstractExchangeMapper]] = {}
+    
+    @classmethod
+    def _validate_module_security(cls, module_path: str, class_name: str) -> bool:
+        """Validate module path and class name for security"""
+        return (ModuleSecurityValidator.validate_module_path(module_path) and 
+                ModuleSecurityValidator.validate_class_name(class_name))
     
     @classmethod
     def register_mapper(cls, name: str, mapper_class: Type[AbstractExchangeMapper]):
@@ -165,25 +274,40 @@ class MapperFactory:
     
     @classmethod
     def load_mapper_from_module(cls, name: str, module_path: str, class_name: str) -> bool:
-        """Dynamically load a mapper from a module
+        """SECURITY: Dynamically load a mapper from a module (DISABLED BY DEFAULT)
+        
+        This method is disabled by default to prevent arbitrary code execution (CVE-001).
+        Only enable in secure development environments with CRYPTO_ALLOW_DYNAMIC_LOADING=true.
         
         Args:
             name: Name to register the mapper under
-            module_path: Path to the module
-            class_name: Name of the class in the module
+            module_path: Path to the module (must pass security validation)
+            class_name: Name of the class in the module (must pass security validation)
             
         Returns:
             True if loaded successfully, False otherwise
         """
+        # SECURITY: Dynamic loading disabled by default
+        if not ALLOW_DYNAMIC_LOADING:
+            logger.error("SECURITY: Dynamic module loading is disabled. Set CRYPTO_ALLOW_DYNAMIC_LOADING=true if needed.")
+            logger.warning(f"Blocked attempt to load mapper from {module_path}.{class_name}")
+            return False
+        
+        # SECURITY: Validate module path and class name
+        if not cls._validate_module_security(module_path, class_name):
+            logger.error(f"SECURITY: Invalid module path or class name rejected: {module_path}.{class_name}")
+            return False
+        
         try:
             module = importlib.import_module(module_path)
             mapper_class = getattr(module, class_name)
             
             if issubclass(mapper_class, AbstractExchangeMapper):
                 cls.register_mapper(name, mapper_class)
+                logger.info(f"Successfully loaded mapper {name} from {module_path}.{class_name}")
                 return True
             else:
-                logger.error(f"Class {class_name} is not a subclass of AbstractExchangeMapper")
+                logger.error(f"SECURITY: Class {class_name} is not a subclass of AbstractExchangeMapper")
                 return False
                 
         except Exception as e:
@@ -192,9 +316,15 @@ class MapperFactory:
 
 
 class AdapterFactory:
-    """Factory for creating database adapter instances"""
+    """Factory for creating database adapter instances with security controls"""
     
     _adapters: Dict[str, Type[AbstractDatabaseAdapter]] = {}
+    
+    @classmethod
+    def _validate_module_security(cls, module_path: str, class_name: str) -> bool:
+        """Validate module path and class name for security"""
+        return (ModuleSecurityValidator.validate_module_path(module_path) and 
+                ModuleSecurityValidator.validate_class_name(class_name))
     
     @classmethod
     def register_adapter(cls, name: str, adapter_class: Type[AbstractDatabaseAdapter]):
@@ -249,25 +379,40 @@ class AdapterFactory:
     
     @classmethod
     def load_adapter_from_module(cls, name: str, module_path: str, class_name: str) -> bool:
-        """Dynamically load an adapter from a module
+        """SECURITY: Dynamically load an adapter from a module (DISABLED BY DEFAULT)
+        
+        This method is disabled by default to prevent arbitrary code execution (CVE-001).
+        Only enable in secure development environments with CRYPTO_ALLOW_DYNAMIC_LOADING=true.
         
         Args:
             name: Name to register the adapter under
-            module_path: Path to the module
-            class_name: Name of the class in the module
+            module_path: Path to the module (must pass security validation)
+            class_name: Name of the class in the module (must pass security validation)
             
         Returns:
             True if loaded successfully, False otherwise
         """
+        # SECURITY: Dynamic loading disabled by default
+        if not ALLOW_DYNAMIC_LOADING:
+            logger.error("SECURITY: Dynamic module loading is disabled. Set CRYPTO_ALLOW_DYNAMIC_LOADING=true if needed.")
+            logger.warning(f"Blocked attempt to load adapter from {module_path}.{class_name}")
+            return False
+        
+        # SECURITY: Validate module path and class name
+        if not cls._validate_module_security(module_path, class_name):
+            logger.error(f"SECURITY: Invalid module path or class name rejected: {module_path}.{class_name}")
+            return False
+        
         try:
             module = importlib.import_module(module_path)
             adapter_class = getattr(module, class_name)
             
             if issubclass(adapter_class, AbstractDatabaseAdapter):
                 cls.register_adapter(name, adapter_class)
+                logger.info(f"Successfully loaded adapter {name} from {module_path}.{class_name}")
                 return True
             else:
-                logger.error(f"Class {class_name} is not a subclass of AbstractDatabaseAdapter")
+                logger.error(f"SECURITY: Class {class_name} is not a subclass of AbstractDatabaseAdapter")
                 return False
                 
         except Exception as e:
@@ -297,36 +442,53 @@ def register_default_implementations():
 
 
 def load_custom_implementations(config):
-    """Load custom implementations from configuration
+    """SECURITY: Load custom implementations from configuration (DISABLED BY DEFAULT)
+    
+    This function is disabled by default to prevent configuration injection attacks (CVE-001).
+    Only enable in secure development environments with CRYPTO_ALLOW_DYNAMIC_LOADING=true.
     
     Args:
         config: Configuration manager instance
     """
+    # SECURITY: Custom implementations disabled by default
+    if not ALLOW_DYNAMIC_LOADING:
+        logger.info("SECURITY: Custom implementations disabled for security. Use static registration instead.")
+        return
+    
     try:
-        # Load custom providers
+        # Load custom providers with security validation
         custom_providers = config.getlist('EXTENSIONS', 'custom_providers')
         for provider_config in custom_providers:
             # Format: "name:module_path:class_name"
             parts = provider_config.split(':')
             if len(parts) == 3:
                 name, module_path, class_name = parts
+                # Security validation is performed in load_provider_from_module
                 ProviderFactory.load_provider_from_module(name, module_path, class_name)
+            else:
+                logger.warning(f"Invalid provider configuration format: {provider_config}")
         
-        # Load custom mappers
+        # Load custom mappers with security validation
         custom_mappers = config.getlist('EXTENSIONS', 'custom_mappers')
         for mapper_config in custom_mappers:
             parts = mapper_config.split(':')
             if len(parts) == 3:
                 name, module_path, class_name = parts
+                # Security validation is performed in load_mapper_from_module
                 MapperFactory.load_mapper_from_module(name, module_path, class_name)
+            else:
+                logger.warning(f"Invalid mapper configuration format: {mapper_config}")
         
-        # Load custom adapters
+        # Load custom adapters with security validation
         custom_adapters = config.getlist('EXTENSIONS', 'custom_adapters')
         for adapter_config in custom_adapters:
             parts = adapter_config.split(':')
             if len(parts) == 3:
                 name, module_path, class_name = parts
+                # Security validation is performed in load_adapter_from_module
                 AdapterFactory.load_adapter_from_module(name, module_path, class_name)
+            else:
+                logger.warning(f"Invalid adapter configuration format: {adapter_config}")
         
         logger.info("Loaded custom implementations from configuration")
         

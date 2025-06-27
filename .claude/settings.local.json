@@ -5,7 +5,17 @@
       "Bash(grep:*)",
       "Bash(python -m pytest tests/test_providers/test_coingecko_provider.py -v)",
       "Bash(python -m pytest tests/test_schedulers/test_update_scheduler.py -v)",
-      "Bash(ls -la sample_config.ini)"
+      "Bash(ls -la sample_config.ini)",
+      "Bash(python:*)",
+      "Bash(rm:*)",
+      "Bash(flake8:*)",
+      "Bash(mypy:*)",
+      "Bash(rg:*)",
+      "Bash(find:*)",
+      "Bash(mv:*)",
+      "Bash(mkdir:*)",
+      "Bash(PYTHONPATH=src python3:*)",
+      "Bash(timeout 120 python3 tests/test_suite_runner.py)"
     ],
     "deny": []
   }

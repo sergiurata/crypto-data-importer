@@ -350,8 +350,8 @@ class AbstractDataProvider(ABC):
         
         if old_delay != self.current_rate_limit_delay:
             logger.info(f"Rate limit increased due to {reason}: "
-                       f"{old_rpm:.1f}→{self.current_requests_per_minute:.1f} req/min, "
-                       f"{old_delay:.1f}→{self.current_rate_limit_delay:.1f}s delay")
+                       f"{old_rpm:.1f}->{self.current_requests_per_minute:.1f} req/min, "
+                       f"{old_delay:.1f}->{self.current_rate_limit_delay:.1f}s delay")
     
     def get_current_rate_stats(self) -> Dict:
         """Get current rate limiting statistics"""

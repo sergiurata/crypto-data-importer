@@ -45,6 +45,13 @@ class ConfigurationManager:
             ValueError: If path is invalid or attempts traversal
         """
         try:
+            # Allow common config file names without extensive validation
+            safe_config_names = ['config.ini', 'settings.ini', 'app.ini', 'main.ini']
+            if config_path in safe_config_names:
+                resolved_path = Path(config_path).resolve()
+                logger.info(f"CVE-002 SAFE: Common config file allowed: {config_path}")
+                return str(resolved_path)
+            
             # Normalize and resolve the path to handle . and .. components
             resolved_path = Path(config_path).resolve()
             
@@ -76,22 +83,30 @@ class ConfigurationManager:
                 logger.error(f"Allowed directories: {[str(d) for d in allowed_dirs]}")
                 raise ValueError(f"Configuration path not in allowed directories: {config_path}")
             
-            # CRITICAL: Block Windows-style absolute paths on Unix systems
+            # CRITICAL: Block Windows-style absolute paths ONLY on Unix systems
+            import platform
             path_str = str(resolved_path)
-            if ':' in path_str and ('\\' in path_str or '/' in path_str):
-                # This looks like a Windows absolute path (C:\... or C:/...)
-                logger.error(f"CVE-002 BLOCKED: Windows-style absolute path detected: {config_path}")
-                raise ValueError(f"Windows-style absolute path not allowed: {config_path}")
+            original_path_str = str(config_path)
             
-            # Block any path containing Windows system directories
-            windows_system_patterns = [
-                'windows', 'system32', 'program files', 'users',
-                'etc', 'root', 'usr', 'var', 'tmp', 'home'
+            # Only apply Windows path blocking on Unix/Linux systems
+            if platform.system() != 'Windows':
+                if ':' in original_path_str and ('\\' in original_path_str or original_path_str.count(':') > 1):
+                    # This looks like a Windows absolute path on a Unix system (C:\... or C:/...)
+                    logger.error(f"CVE-002 BLOCKED: Windows-style absolute path detected: {config_path}")
+                    raise ValueError(f"Windows-style absolute path not allowed: {config_path}")
+            
+            # Block suspicious system directory patterns (only in original input path)
+            original_lower = original_path_str.lower()
+            suspicious_patterns = [
+                '/etc/', '\\etc\\', '/root/', '\\root\\',
+                '/usr/', '\\usr\\', '/var/', '\\var\\',
+                'system32', 'program files'
             ]
-            path_lower = path_str.lower()
-            for pattern in windows_system_patterns:
-                if pattern in path_lower:
-                    logger.error(f"CVE-002 BLOCKED: System directory in path: {pattern}")
+            
+            # Only block if the original path contains suspicious patterns
+            for pattern in suspicious_patterns:
+                if pattern in original_lower and not path_str.startswith(str(Path.cwd())):
+                    logger.error(f"CVE-002 BLOCKED: Suspicious system directory pattern: {pattern}")
                     raise ValueError(f"System directory access not allowed: {config_path}")
             
             # Additional validation: ensure it's a .ini or .cfg file

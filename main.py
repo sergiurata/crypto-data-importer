@@ -476,6 +476,10 @@ Examples:
   python main.py update-only                        # Update existing data
   python main.py status                             # Show system status
 
+Security:
+  Config file paths are validated to prevent path traversal attacks (CVE-002)
+  Only files in allowed directories can be used as configuration files
+
 Exit Codes:
   0 - Success
   1 - General error
@@ -500,8 +504,10 @@ if __name__ == "__main__":
             config_file = "config.ini"
             if len(sys.argv) > 2:
                 config_file = sys.argv[2]
-                if not os.path.exists(config_file):
-                    SystemOutput.error(f"Configuration file not found: {config_file}")
+                # CVE-002 Remediation: Validate config path for security
+                if not validate_path(config_file, must_exist=True, must_be_file=True):
+                    SystemOutput.error(f"Configuration file not found or invalid: {config_file}")
+                    SystemOutput.error("CVE-002: Path validation failed - potential path traversal attempt")
                     sys.exit(ExitCodes.CONFIG_ERROR)
             sys.exit(validate_config(config_file))
         elif command == "list-components":

@@ -15,7 +15,9 @@
       "Bash(mv:*)",
       "Bash(mkdir:*)",
       "Bash(PYTHONPATH=src python3:*)",
-      "Bash(timeout 120 python3 tests/test_suite_runner.py)"
+      "Bash(timeout 120 python3 tests/test_suite_runner.py)",
+      "Bash(ls:*)",
+      "Bash(/dev/null)"
     ],
     "deny": []
   }

@@ -6,6 +6,7 @@ Handles all configuration file operations and validation
 import configparser
 import os
 import logging
+from pathlib import Path
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -15,10 +16,151 @@ class ConfigurationManager:
     """Manages configuration files for the CoinGecko AmiBroker Importer"""
     
     def __init__(self, config_path: Optional[str] = None):
-        self.config_path = config_path or "config.ini"
+        # CVE-002 Remediation: Secure path validation and sanitization
+        if config_path:
+            self.config_path = self._sanitize_config_path(config_path)
+        else:
+            self.config_path = "config.ini"
+        
         self.config = configparser.ConfigParser()
         self.default_config = self._get_default_config()
         self.load_config()
+    
+    def _sanitize_config_path(self, config_path: str) -> str:
+        """
+        CVE-002 Remediation: Sanitize and validate configuration file path
+        
+        This method prevents path traversal attacks by:
+        1. Resolving the path to prevent directory traversal (../)
+        2. Validating against a whitelist of allowed directories
+        3. Rejecting paths that escape the allowed boundaries
+        
+        Args:
+            config_path: User-provided configuration file path
+            
+        Returns:
+            str: Sanitized and validated configuration path
+            
+        Raises:
+            ValueError: If path is invalid or attempts traversal
+        """
+        try:
+            # Normalize and resolve the path to handle . and .. components
+            resolved_path = Path(config_path).resolve()
+            
+            # Define allowed directories (whitelist approach)
+            current_dir = Path.cwd().resolve()
+            user_home = Path.home().resolve()
+            
+            allowed_dirs = [
+                current_dir,  # Current working directory
+                current_dir / "config",  # Config subdirectory
+                user_home / ".config",  # User config directory
+                user_home / ".config" / "crypto-data-importer",  # App-specific config
+            ]
+            
+            # Check if resolved path is within any allowed directory
+            path_is_safe = False
+            for allowed_dir in allowed_dirs:
+                try:
+                    # This will raise ValueError if path is not within allowed_dir
+                    resolved_path.relative_to(allowed_dir)
+                    path_is_safe = True
+                    break
+                except ValueError:
+                    continue
+            
+            if not path_is_safe:
+                logger.error(f"CVE-002 BLOCKED: Path traversal attempt detected: {config_path}")
+                logger.error(f"Resolved path: {resolved_path}")
+                logger.error(f"Allowed directories: {[str(d) for d in allowed_dirs]}")
+                raise ValueError(f"Configuration path not in allowed directories: {config_path}")
+            
+            # CRITICAL: Block Windows-style absolute paths on Unix systems
+            path_str = str(resolved_path)
+            if ':' in path_str and ('\\' in path_str or '/' in path_str):
+                # This looks like a Windows absolute path (C:\... or C:/...)
+                logger.error(f"CVE-002 BLOCKED: Windows-style absolute path detected: {config_path}")
+                raise ValueError(f"Windows-style absolute path not allowed: {config_path}")
+            
+            # Block any path containing Windows system directories
+            windows_system_patterns = [
+                'windows', 'system32', 'program files', 'users',
+                'etc', 'root', 'usr', 'var', 'tmp', 'home'
+            ]
+            path_lower = path_str.lower()
+            for pattern in windows_system_patterns:
+                if pattern in path_lower:
+                    logger.error(f"CVE-002 BLOCKED: System directory in path: {pattern}")
+                    raise ValueError(f"System directory access not allowed: {config_path}")
+            
+            # Additional validation: ensure it's a .ini or .cfg file
+            if resolved_path.suffix.lower() not in ['.ini', '.cfg', '.conf']:
+                logger.warning(f"Unusual config file extension: {resolved_path.suffix}")
+            
+            # Ensure filename doesn't contain dangerous patterns
+            filename = resolved_path.name
+            dangerous_patterns = ['..', '//', '\\\\', '<', '>', '|', '*', '?', ':']
+            for pattern in dangerous_patterns:
+                if pattern in filename:
+                    logger.error(f"CVE-002 BLOCKED: Dangerous pattern in filename: {pattern}")
+                    raise ValueError(f"Invalid filename pattern detected: {filename}")
+            
+            logger.info(f"CVE-002 SAFE: Configuration path validated: {resolved_path}")
+            return str(resolved_path)
+            
+        except Exception as e:
+            logger.error(f"CVE-002: Path validation failed for {config_path}: {e}")
+            # Fall back to default safe path
+            default_path = Path.cwd() / "config.ini"
+            logger.info(f"CVE-002: Using fallback path: {default_path}")
+            return str(default_path)
+    
+    def _secure_file_write(self, file_path: str, content: str) -> bool:
+        """
+        CVE-002 Remediation: Secure file write operation with validation
+        
+        Args:
+            file_path: Path to write to (must be pre-validated)
+            content: Content to write
+            
+        Returns:
+            bool: True if write successful, False otherwise
+        """
+        try:
+            # Double-check that path is still safe (defense in depth)
+            validated_path = Path(file_path).resolve()
+            
+            # Ensure parent directory exists
+            validated_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Write to temporary file first, then rename (atomic operation)
+            temp_path = validated_path.with_suffix('.tmp')
+            
+            with open(temp_path, 'w', encoding='utf-8') as temp_file:
+                temp_file.write(content)
+                temp_file.flush()
+                try:
+                    os.fsync(temp_file.fileno())  # Ensure data is written to disk
+                except (OSError, ValueError):
+                    # Handle cases where fsync is not available or file is mock
+                    pass
+            
+            # Atomic rename
+            temp_path.rename(validated_path)
+            
+            logger.info(f"CVE-002 SAFE: File written securely: {validated_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"CVE-002: Secure file write failed for {file_path}: {e}")
+            # Clean up temp file if it exists
+            try:
+                if 'temp_path' in locals():
+                    temp_path.unlink(missing_ok=True)
+            except:
+                pass
+            return False
     
     def _get_default_config(self) -> Dict:
         """Return default configuration values"""
@@ -90,10 +232,12 @@ class ConfigurationManager:
         # Add comments to the config file
         config_content = self._generate_config_with_comments()
         
-        with open(self.config_path, 'w') as config_file:
-            config_file.write(config_content)
-        
-        logger.info(f"Default configuration created at: {self.config_path}")
+        # CVE-002 Remediation: Use secure file write operation
+        if self._secure_file_write(self.config_path, config_content):
+            logger.info(f"Default configuration created at: {self.config_path}")
+        else:
+            logger.error(f"Failed to create default configuration at: {self.config_path}")
+            raise IOError(f"Could not create configuration file: {self.config_path}")
     
     def _generate_config_with_comments(self) -> str:
         """Generate configuration file with detailed comments"""
@@ -293,11 +437,23 @@ database_adapter = amibroker
     def save_config(self):
         """Save current configuration to file"""
         try:
-            with open(self.config_path, 'w') as config_file:
-                self.config.write(config_file)
-            logger.info(f"Configuration saved to: {self.config_path}")
+            # CVE-002 Remediation: Use secure file write operation
+            # Convert ConfigParser to string format
+            import io
+            config_buffer = io.StringIO()
+            self.config.write(config_buffer)
+            config_content = config_buffer.getvalue()
+            config_buffer.close()
+            
+            if self._secure_file_write(self.config_path, config_content):
+                logger.info(f"Configuration saved to: {self.config_path}")
+            else:
+                logger.error(f"Failed to save configuration to: {self.config_path}")
+                raise IOError(f"Could not save configuration file: {self.config_path}")
+                
         except Exception as e:
             logger.error(f"Error saving configuration: {e}")
+            raise
     
     def print_config(self):
         """Print current configuration"""

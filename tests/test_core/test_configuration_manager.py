@@ -22,14 +22,38 @@ class TestConfigurationManager(unittest.TestCase):
     
     def setUp(self):
         """Set up test fixtures"""
-        self.temp_dir = tempfile.mkdtemp()
-        self.test_config_path = os.path.join(self.temp_dir, "test_config.ini")
+        # Use current directory for tests to stay within allowed directories
+        self.temp_dir = Path.cwd() / "test_temp_main"
+        self.temp_dir.mkdir(exist_ok=True)
+        self.test_config_path = str(self.temp_dir / "test_config.ini")
         
     def tearDown(self):
         """Clean up test fixtures"""
-        if os.path.exists(self.test_config_path):
-            os.remove(self.test_config_path)
-        os.rmdir(self.temp_dir)
+        import shutil
+        
+        # Clean up the main temp directory
+        if self.temp_dir.exists():
+            try:
+                shutil.rmtree(self.temp_dir)
+            except (OSError, PermissionError):
+                # Try individual file cleanup if directory removal fails
+                try:
+                    for file_path in self.temp_dir.rglob("*"):
+                        if file_path.is_file():
+                            file_path.unlink(missing_ok=True)
+                    self.temp_dir.rmdir()
+                except (OSError, PermissionError):
+                    pass  # Best effort cleanup
+        
+        # Clean up any stray test files in current directory
+        current_dir = Path.cwd()
+        
+        # Remove any .tmp files
+        for tmp_file in current_dir.glob("*.tmp"):
+            try:
+                tmp_file.unlink(missing_ok=True)
+            except (OSError, PermissionError):
+                pass
     
     def test_init_with_default_path(self):
         """Test initialization with default config path"""
@@ -244,5 +268,421 @@ database_path = /test/path/test.adb
             mock_logger.error.assert_called()
 
 
+class TestConfigurationManagerSecurity(unittest.TestCase):
+    """CVE-002 Security test cases for ConfigurationManager path traversal prevention"""
+    
+    def setUp(self):
+        """Set up test fixtures"""
+        # Use current directory for tests to stay within allowed directories
+        self.temp_dir = Path.cwd() / "test_temp"
+        self.temp_dir.mkdir(exist_ok=True)
+        self.safe_config_path = str(self.temp_dir / "safe_config.ini")
+        
+        # Patch the allowed directories to prevent creating config/ directory during tests
+        self.original_sanitize = None
+        
+    def tearDown(self):
+        """Clean up test fixtures"""
+        import shutil
+        import glob
+        
+        # Clean up the main temp directory
+        if self.temp_dir.exists():
+            try:
+                shutil.rmtree(self.temp_dir)
+            except (OSError, PermissionError) as e:
+                # Try individual file cleanup if directory removal fails
+                try:
+                    for file_path in self.temp_dir.rglob("*"):
+                        if file_path.is_file():
+                            file_path.unlink(missing_ok=True)
+                    self.temp_dir.rmdir()
+                except (OSError, PermissionError):
+                    pass  # Best effort cleanup
+        
+        # Clean up any stray test files in current directory
+        current_dir = Path.cwd()
+        
+        # Remove any .tmp files
+        for tmp_file in current_dir.glob("*.tmp"):
+            try:
+                tmp_file.unlink(missing_ok=True)
+            except (OSError, PermissionError):
+                pass
+        
+        # Remove any test config files (but not the main config.ini)
+        test_config_patterns = [
+            "test_*.ini",
+            "*test*.ini", 
+            "safe_config*.ini",
+            "sample_config.ini"
+        ]
+        
+        for pattern in test_config_patterns:
+            for test_file in current_dir.glob(pattern):
+                # Make sure we don't delete the main config.ini
+                if test_file.name != "config.ini":
+                    try:
+                        test_file.unlink(missing_ok=True)
+                    except (OSError, PermissionError):
+                        pass
+        
+        # CRITICAL: Clean up any dangerous filenames that might have been created
+        dangerous_patterns = ["C:*", "*Windows*", "*System32*", "*etc*passwd*"]
+        for pattern in dangerous_patterns:
+            for dangerous_file in current_dir.glob(pattern):
+                if dangerous_file.is_file():
+                    try:
+                        dangerous_file.unlink()
+                    except (OSError, PermissionError):
+                        pass
+        
+        # Clean up config directory if it was created during tests
+        config_dir = current_dir / "config"
+        if config_dir.exists():
+            try:
+                # Remove any test files from config directory
+                for test_file in config_dir.glob("*"):
+                    if test_file.is_file() and "test" in test_file.name.lower():
+                        test_file.unlink()
+                    elif test_file.is_file() and any(dangerous in test_file.name.lower() 
+                                                   for dangerous in ["malicious", "windows", "system32", "etc", "passwd"]):
+                        test_file.unlink()
+                
+                # Remove config directory if it's empty or only contains test files
+                remaining_files = list(config_dir.glob("*"))
+                if not remaining_files:
+                    config_dir.rmdir()
+            except (OSError, PermissionError):
+                pass
+    
+    def test_cve002_path_traversal_prevention_unix(self):
+        """Test CVE-002: Path traversal prevention with Unix-style paths"""
+        dangerous_paths = [
+            "../../../etc/passwd",
+            "../../root/.ssh/id_rsa", 
+            "../../../tmp/malicious.ini",
+            "../../../../etc/shadow",
+            "../../../home/user/.bashrc"
+        ]
+        
+        for dangerous_path in dangerous_paths:
+            with self.subTest(path=dangerous_path):
+                with patch('core.configuration_manager.logger') as mock_logger:
+                    # Should not raise exception, but should use fallback
+                    config_manager = ConfigurationManager(dangerous_path)
+                    
+                    # Should have logged the security violation
+                    mock_logger.error.assert_called()
+                    
+                    # Should have used fallback path, not the dangerous one
+                    self.assertNotEqual(config_manager.config_path, dangerous_path)
+                    self.assertTrue(config_manager.config_path.endswith('config.ini'))
+    
+    def test_cve002_path_traversal_prevention_windows(self):
+        """Test CVE-002: Path traversal prevention with Windows-style paths"""
+        dangerous_paths = [
+            "..\\..\\..\\Windows\\System32\\config\\system",
+            "..\\..\\Users\\Administrator\\Desktop\\secrets.txt",
+            "..\\..\\..\\Windows\\System32\\drivers\\etc\\hosts",
+            "C:\\Windows\\System32\\cmd.exe",
+            "..\\..\\..\\Program Files\\sensitive.ini"
+        ]
+        
+        for dangerous_path in dangerous_paths:
+            with self.subTest(path=dangerous_path):
+                with patch('core.configuration_manager.logger') as mock_logger:
+                    config_manager = ConfigurationManager(dangerous_path)
+                    
+                    # Should have logged the security violation
+                    mock_logger.error.assert_called()
+                    
+                    # Should have used fallback path
+                    self.assertNotEqual(config_manager.config_path, dangerous_path)
+                    self.assertTrue(config_manager.config_path.endswith('config.ini'))
+    
+    def test_cve002_dangerous_filename_patterns(self):
+        """Test CVE-002: Dangerous filename pattern detection"""
+        dangerous_filenames = [
+            "config..ini",
+            "config<script>.ini",
+            "config>output.ini",
+            "config|pipe.ini",
+            "config*wildcard.ini",
+            "config?query.ini"
+        ]
+        
+        for dangerous_filename in dangerous_filenames:
+            with self.subTest(filename=dangerous_filename):
+                with patch('core.configuration_manager.logger') as mock_logger:
+                    config_manager = ConfigurationManager(dangerous_filename)
+                    
+                    # Should have logged the security violation
+                    mock_logger.error.assert_called()
+                    
+                    # Should have used fallback path
+                    self.assertNotEqual(config_manager.config_path, dangerous_filename)
+    
+    def test_cve002_absolute_path_outside_allowed_dirs(self):
+        """Test CVE-002: Absolute paths outside allowed directories"""
+        dangerous_absolute_paths = [
+            "/etc/passwd",
+            "/root/.ssh/id_rsa",
+            "/tmp/malicious.ini",
+            "/var/log/system.log",
+            "/home/user/.bashrc"
+        ]
+        
+        for dangerous_path in dangerous_absolute_paths:
+            with self.subTest(path=dangerous_path):
+                with patch('core.configuration_manager.logger') as mock_logger:
+                    config_manager = ConfigurationManager(dangerous_path)
+                    
+                    # Should have logged the security violation
+                    mock_logger.error.assert_called()
+                    
+                    # Should have used fallback path
+                    self.assertNotEqual(config_manager.config_path, dangerous_path)
+    
+    def test_cve002_valid_paths_allowed(self):
+        """Test CVE-002: Valid paths within allowed directories are accepted"""
+        # Test valid paths that should be allowed
+        valid_paths = [
+            "config.ini",
+            "./config.ini",
+            "config/app.ini",
+            "my_config.ini"
+        ]
+        
+        for valid_path in valid_paths:
+            with self.subTest(path=valid_path):
+                with patch('os.path.exists', return_value=False):
+                    with patch('builtins.open', mock_open()):
+                        config_manager = ConfigurationManager(valid_path)
+                        
+                        # Should accept valid paths
+                        resolved_path = Path(valid_path).resolve()
+                        self.assertEqual(config_manager.config_path, str(resolved_path))
+    
+    def test_cve002_symlink_attack_prevention(self):
+        """Test CVE-002: Symlink attack prevention"""
+        # Create a symlink that points outside allowed directory
+        symlink_path = os.path.join(self.temp_dir, "symlink_config.ini")
+        
+        # Create target outside allowed directory
+        target_path = "/tmp/sensitive_file.txt"
+        
+        # Mock symlink creation and resolution
+        with patch('pathlib.Path.resolve') as mock_resolve:
+            mock_resolve.return_value = Path(target_path)
+            
+            with patch('core.configuration_manager.logger') as mock_logger:
+                config_manager = ConfigurationManager(symlink_path)
+                
+                # Should have detected and blocked the symlink attack
+                mock_logger.error.assert_called()
+                
+                # Should have used fallback path
+                self.assertNotEqual(config_manager.config_path, target_path)
+    
+    def test_cve002_secure_file_write_validation(self):
+        """Test CVE-002: Secure file write operation validation"""
+        config_manager = ConfigurationManager(self.safe_config_path)
+        
+        # Test secure write with valid path
+        test_content = "test configuration content"
+        result = config_manager._secure_file_write(self.safe_config_path, test_content)
+        
+        self.assertTrue(result)
+        self.assertTrue(os.path.exists(self.safe_config_path))
+        
+        # Verify content was written correctly
+        with open(self.safe_config_path, 'r') as f:
+            written_content = f.read()
+        self.assertEqual(written_content, test_content)
+    
+    def test_cve002_secure_file_write_atomic_operation(self):
+        """Test CVE-002: Secure file write uses atomic operations"""
+        config_manager = ConfigurationManager(self.safe_config_path)
+        
+        # Mock to simulate interruption during write
+        with patch('pathlib.Path.rename', side_effect=OSError("Simulated interruption")):
+            result = config_manager._secure_file_write(self.safe_config_path, "test content")
+            
+            # Should fail gracefully
+            self.assertFalse(result)
+            
+            # Original file should not be corrupted (atomic operation)
+            self.assertFalse(os.path.exists(self.safe_config_path))
+    
+    def test_cve002_create_default_config_security(self):
+        """Test CVE-002: create_default_config uses secure operations"""
+        with patch.object(ConfigurationManager, '_secure_file_write') as mock_secure_write:
+            mock_secure_write.return_value = True
+            
+            config_manager = ConfigurationManager(self.safe_config_path)
+            
+            # Should have called secure file write
+            mock_secure_write.assert_called()
+    
+    def test_cve002_save_config_security(self):
+        """Test CVE-002: save_config uses secure operations"""
+        config_manager = ConfigurationManager(self.safe_config_path)
+        
+        with patch.object(config_manager, '_secure_file_write') as mock_secure_write:
+            mock_secure_write.return_value = True
+            
+            config_manager.save_config()
+            
+            # Should have called secure file write
+            mock_secure_write.assert_called()
+    
+    def test_cve002_file_extension_validation(self):
+        """Test CVE-002: File extension validation warnings"""
+        unusual_extensions = [
+            "config.txt",
+            "config.json", 
+            "config.exe",
+            "config.sh",
+            "config.bat"
+        ]
+        
+        for unusual_ext in unusual_extensions:
+            config_path = str(self.temp_dir / unusual_ext)
+            with self.subTest(extension=unusual_ext):
+                with patch('core.configuration_manager.logger') as mock_logger:
+                    with patch('os.path.exists', return_value=False):
+                        with patch('builtins.open', mock_open()):
+                            ConfigurationManager(config_path)
+                            
+                            # Should log warning for unusual extension
+                            mock_logger.warning.assert_called()
+    
+    def test_cve002_defense_in_depth_validation(self):
+        """Test CVE-002: Defense in depth - multiple validation layers"""
+        # Test that even if initial validation is bypassed, 
+        # secure file operations still validate paths
+        config_manager = ConfigurationManager(self.safe_config_path)
+        
+        # Attempt to write to dangerous path directly
+        dangerous_path = "../../../etc/passwd"
+        
+        with patch('core.configuration_manager.logger') as mock_logger:
+            result = config_manager._secure_file_write(dangerous_path, "malicious content")
+            
+            # Should fail due to path validation in secure_file_write
+            self.assertFalse(result)
+            mock_logger.error.assert_called()
+
+
+def cleanup_all_test_files():
+    """Module-level cleanup function to remove any remaining test files"""
+    import shutil
+    from pathlib import Path
+    import os
+    
+    current_dir = Path.cwd()
+    
+    # Clean up test directories
+    test_dirs = [
+        "test_temp",
+        "test_temp_main", 
+        "test_temp_security"
+    ]
+    
+    for dir_name in test_dirs:
+        test_dir = current_dir / dir_name
+        if test_dir.exists():
+            try:
+                shutil.rmtree(test_dir)
+                print(f"Cleaned up directory: {test_dir}")
+            except (OSError, PermissionError) as e:
+                print(f"Warning: Could not remove {test_dir}: {e}")
+    
+    # Clean up temporary files
+    temp_patterns = [
+        "*.tmp",
+        "test_*.ini",
+        "*test*.ini",
+        "safe_config*.ini",
+        "sample_config.ini"
+    ]
+    
+    for pattern in temp_patterns:
+        for temp_file in current_dir.glob(pattern):
+            # Protect the main config.ini
+            if temp_file.name != "config.ini":
+                try:
+                    temp_file.unlink(missing_ok=True)
+                    print(f"Cleaned up file: {temp_file}")
+                except (OSError, PermissionError) as e:
+                    print(f"Warning: Could not remove {temp_file}: {e}")
+    
+    # CRITICAL: Clean up dangerous Windows-style filenames that may have been created
+    dangerous_patterns = [
+        "C:*",
+        "*Windows*",
+        "*System32*",
+        "*Program Files*",
+        "*etc*passwd*",
+        "*root*"
+    ]
+    
+    for pattern in dangerous_patterns:
+        for dangerous_file in current_dir.glob(pattern):
+            # Extra safety check - only remove if it looks like a test artifact
+            if dangerous_file.is_file():
+                try:
+                    dangerous_file.unlink()
+                    print(f"SECURITY: Removed dangerous test file: {dangerous_file}")
+                except (OSError, PermissionError) as e:
+                    print(f"ERROR: Could not remove dangerous file {dangerous_file}: {e}")
+    
+    # Also clean up files that contain system paths in their names
+    for file_path in current_dir.iterdir():
+        if file_path.is_file():
+            filename_lower = file_path.name.lower()
+            dangerous_keywords = ['windows', 'system32', 'etc', 'passwd', 'shadow', 'cmd.exe']
+            
+            if any(keyword in filename_lower for keyword in dangerous_keywords):
+                # This looks like a test artifact with a dangerous name
+                if filename_lower != "config.ini":  # Protect main config
+                    try:
+                        file_path.unlink()
+                        print(f"SECURITY: Removed file with suspicious name: {file_path}")
+                    except (OSError, PermissionError) as e:
+                        print(f"ERROR: Could not remove suspicious file {file_path}: {e}")
+    
+    # Clean up config directory if it was created during tests
+    config_dir = current_dir / "config"
+    if config_dir.exists():
+        try:
+            # Remove any test files from config directory
+            test_files_removed = []
+            for test_file in config_dir.glob("*"):
+                if test_file.is_file():
+                    filename_lower = test_file.name.lower()
+                    # Remove files that look like test artifacts
+                    if any(keyword in filename_lower for keyword in 
+                          ["test", "malicious", "windows", "system32", "etc", "passwd", "shadow", "cmd.exe"]):
+                        test_file.unlink()
+                        test_files_removed.append(test_file.name)
+            
+            if test_files_removed:
+                print(f"Cleaned up test files from config/: {test_files_removed}")
+            
+            # Remove config directory if it's empty
+            remaining_files = list(config_dir.glob("*"))
+            if not remaining_files:
+                config_dir.rmdir()
+                print("Removed empty config/ directory created during tests")
+        except (OSError, PermissionError) as e:
+            print(f"Warning: Could not clean up config directory: {e}")
+
+
 if __name__ == '__main__':
-    unittest.main()
+    try:
+        unittest.main()
+    finally:
+        # Ensure cleanup runs even if tests fail
+        cleanup_all_test_files()

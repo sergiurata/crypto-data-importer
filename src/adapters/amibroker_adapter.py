@@ -176,7 +176,8 @@ class AmiBrokerAdapter(AbstractDatabaseAdapter):
             quotations = stock.Quotations
             
             for date, row in data.iterrows():
-                dt = date.to_pydatetime()
+                # Type hint for PyCharm: date is pandas.Timestamp
+                dt = pd.Timestamp(date).to_pydatetime()
                 quote = quotations.Add(dt)
                 quote.Open = float(row['Open'])
                 quote.High = float(row['High'])

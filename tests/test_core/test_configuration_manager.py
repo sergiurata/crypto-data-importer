@@ -701,6 +701,197 @@ def cleanup_all_test_files():
             print(f"Warning: Could not clean up config directory: {e}")
 
 
+class TestConfigurationManagerNewSections(unittest.TestCase):
+    """Test cases for new configuration sections (CACHE and ADAPTIVE_RATE_LIMITING)"""
+    
+    def setUp(self):
+        """Set up test fixtures for new config sections"""
+        self.temp_dir = Path.cwd() / "test_temp_new_config"
+        self.temp_dir.mkdir(exist_ok=True)
+        self.test_config_path = str(self.temp_dir / "test_config_new.ini")
+        
+    def tearDown(self):
+        """Clean up test fixtures"""
+        import shutil
+        if self.temp_dir.exists():
+            try:
+                shutil.rmtree(self.temp_dir)
+            except (OSError, PermissionError):
+                pass
+    
+    def test_cache_configuration_defaults(self):
+        """Test CACHE section configuration defaults"""
+        # Create minimal config content without CACHE section
+        config_content = """
+[API]
+coingecko_api_key = test_key
+requests_per_minute = 24
+
+[IMPORT]
+rate_limit_delay = 2.5
+"""
+        with open(self.test_config_path, 'w') as f:
+            f.write(config_content)
+        
+        # Create configuration manager
+        config_manager = ConfigurationManager(self.test_config_path)
+        
+        # Test default values for cache settings
+        self.assertEqual(config_manager.getboolean('CACHE', 'enable_api_cache', True), True)
+        self.assertEqual(config_manager.get('CACHE', 'cache_file', 'coingecko_api_cache.json'), 'coingecko_api_cache.json')
+        self.assertEqual(config_manager.getint('CACHE', 'exchange_data_ttl_hours', 24), 24)
+        self.assertEqual(config_manager.getint('CACHE', 'market_data_ttl_hours', 1), 1)
+        self.assertEqual(config_manager.getint('CACHE', 'coin_details_ttl_hours', 6), 6)
+        self.assertEqual(config_manager.getint('CACHE', 'max_cache_size_mb', 100), 100)
+    
+    def test_cache_configuration_explicit(self):
+        """Test CACHE section with explicit values"""
+        config_content = """
+[API]
+coingecko_api_key = test_key
+
+[CACHE]
+enable_api_cache = false
+cache_file = custom_cache.json
+exchange_data_ttl_hours = 48
+market_data_ttl_hours = 2
+coin_details_ttl_hours = 12
+max_cache_size_mb = 200
+clear_expired_on_startup = false
+"""
+        with open(self.test_config_path, 'w') as f:
+            f.write(config_content)
+        
+        config_manager = ConfigurationManager(self.test_config_path)
+        
+        # Test explicit values
+        self.assertEqual(config_manager.getboolean('CACHE', 'enable_api_cache'), False)
+        self.assertEqual(config_manager.get('CACHE', 'cache_file'), 'custom_cache.json')
+        self.assertEqual(config_manager.getint('CACHE', 'exchange_data_ttl_hours'), 48)
+        self.assertEqual(config_manager.getint('CACHE', 'market_data_ttl_hours'), 2)
+        self.assertEqual(config_manager.getint('CACHE', 'coin_details_ttl_hours'), 12)
+        self.assertEqual(config_manager.getint('CACHE', 'max_cache_size_mb'), 200)
+        self.assertEqual(config_manager.getboolean('CACHE', 'clear_expired_on_startup'), False)
+    
+    def test_adaptive_rate_limiting_configuration_defaults(self):
+        """Test ADAPTIVE_RATE_LIMITING section configuration defaults"""
+        # Create minimal config content without ADAPTIVE_RATE_LIMITING section
+        config_content = """
+[API]
+requests_per_minute = 24
+
+[IMPORT]
+rate_limit_delay = 2.5
+"""
+        with open(self.test_config_path, 'w') as f:
+            f.write(config_content)
+        
+        config_manager = ConfigurationManager(self.test_config_path)
+        
+        # Test default values for adaptive rate limiting settings
+        self.assertEqual(config_manager.getboolean('ADAPTIVE_RATE_LIMITING', 'enable_adaptive_rate_limiting', True), True)
+        self.assertEqual(config_manager.getfloat('ADAPTIVE_RATE_LIMITING', 'min_requests_per_minute', 10), 10.0)
+        self.assertEqual(config_manager.getfloat('ADAPTIVE_RATE_LIMITING', 'max_requests_per_minute', 50), 50.0)
+        self.assertEqual(config_manager.getfloat('ADAPTIVE_RATE_LIMITING', 'min_rate_limit_delay', 1.0), 1.0)
+        self.assertEqual(config_manager.getfloat('ADAPTIVE_RATE_LIMITING', 'max_rate_limit_delay', 10.0), 10.0)
+        self.assertEqual(config_manager.getfloat('ADAPTIVE_RATE_LIMITING', 'rate_limit_adjustment_factor', 0.8), 0.8)
+        self.assertEqual(config_manager.getfloat('ADAPTIVE_RATE_LIMITING', 'rate_limit_increase_factor', 1.2), 1.2)
+        self.assertEqual(config_manager.getint('ADAPTIVE_RATE_LIMITING', 'consecutive_successes_threshold', 10), 10)
+        self.assertEqual(config_manager.getint('ADAPTIVE_RATE_LIMITING', 'consecutive_failures_threshold', 3), 3)
+        self.assertEqual(config_manager.getint('ADAPTIVE_RATE_LIMITING', 'monitoring_window_size', 20), 20)
+    
+    def test_adaptive_rate_limiting_configuration_explicit(self):
+        """Test ADAPTIVE_RATE_LIMITING section with explicit values"""
+        config_content = """
+[API]
+requests_per_minute = 30
+
+[IMPORT]
+rate_limit_delay = 1.0
+
+[ADAPTIVE_RATE_LIMITING]
+enable_adaptive_rate_limiting = false
+min_requests_per_minute = 5
+max_requests_per_minute = 100
+min_rate_limit_delay = 0.5
+max_rate_limit_delay = 20.0
+rate_limit_adjustment_factor = 0.7
+rate_limit_increase_factor = 1.3
+consecutive_successes_threshold = 15
+consecutive_failures_threshold = 5
+monitoring_window_size = 30
+"""
+        with open(self.test_config_path, 'w') as f:
+            f.write(config_content)
+        
+        config_manager = ConfigurationManager(self.test_config_path)
+        
+        # Test explicit values
+        self.assertEqual(config_manager.getboolean('ADAPTIVE_RATE_LIMITING', 'enable_adaptive_rate_limiting'), False)
+        self.assertEqual(config_manager.getfloat('ADAPTIVE_RATE_LIMITING', 'min_requests_per_minute'), 5.0)
+        self.assertEqual(config_manager.getfloat('ADAPTIVE_RATE_LIMITING', 'max_requests_per_minute'), 100.0)
+        self.assertEqual(config_manager.getfloat('ADAPTIVE_RATE_LIMITING', 'min_rate_limit_delay'), 0.5)
+        self.assertEqual(config_manager.getfloat('ADAPTIVE_RATE_LIMITING', 'max_rate_limit_delay'), 20.0)
+        self.assertEqual(config_manager.getfloat('ADAPTIVE_RATE_LIMITING', 'rate_limit_adjustment_factor'), 0.7)
+        self.assertEqual(config_manager.getfloat('ADAPTIVE_RATE_LIMITING', 'rate_limit_increase_factor'), 1.3)
+        self.assertEqual(config_manager.getint('ADAPTIVE_RATE_LIMITING', 'consecutive_successes_threshold'), 15)
+        self.assertEqual(config_manager.getint('ADAPTIVE_RATE_LIMITING', 'consecutive_failures_threshold'), 5)
+        self.assertEqual(config_manager.getint('ADAPTIVE_RATE_LIMITING', 'monitoring_window_size'), 30)
+    
+    def test_configuration_integration_with_provider_classes(self):
+        """Test that new configuration sections work with provider classes"""
+        config_content = """
+[API]
+coingecko_api_key = test_key
+requests_per_minute = 24
+timeout_seconds = 30
+retry_attempts = 3
+
+[IMPORT]
+rate_limit_delay = 2.5
+
+[CACHE]
+enable_api_cache = true
+cache_file = integration_test_cache.json
+exchange_data_ttl_hours = 24
+market_data_ttl_hours = 1
+coin_details_ttl_hours = 6
+
+[ADAPTIVE_RATE_LIMITING]
+enable_adaptive_rate_limiting = true
+min_requests_per_minute = 10
+max_requests_per_minute = 50
+consecutive_successes_threshold = 10
+consecutive_failures_threshold = 3
+"""
+        with open(self.test_config_path, 'w') as f:
+            f.write(config_content)
+        
+        config_manager = ConfigurationManager(self.test_config_path)
+        
+        # Test that all sections are properly loaded and accessible
+        self.assertTrue(config_manager.has_section('API'))
+        self.assertTrue(config_manager.has_section('IMPORT'))
+        self.assertTrue(config_manager.has_section('CACHE'))
+        self.assertTrue(config_manager.has_section('ADAPTIVE_RATE_LIMITING'))
+        
+        # Test cross-section compatibility (adaptive rate limiting uses API/IMPORT as starting points)
+        api_requests_per_minute = config_manager.getfloat('API', 'requests_per_minute')
+        import_rate_delay = config_manager.getfloat('IMPORT', 'rate_limit_delay')
+        adaptive_enabled = config_manager.getboolean('ADAPTIVE_RATE_LIMITING', 'enable_adaptive_rate_limiting')
+        
+        self.assertEqual(api_requests_per_minute, 24.0)
+        self.assertEqual(import_rate_delay, 2.5)
+        self.assertTrue(adaptive_enabled)
+        
+        # Verify bounds are respected
+        min_rpm = config_manager.getfloat('ADAPTIVE_RATE_LIMITING', 'min_requests_per_minute')
+        max_rpm = config_manager.getfloat('ADAPTIVE_RATE_LIMITING', 'max_requests_per_minute')
+        
+        self.assertLessEqual(min_rpm, api_requests_per_minute)
+        self.assertGreaterEqual(max_rpm, api_requests_per_minute)
+
+
 if __name__ == '__main__':
     try:
         unittest.main()

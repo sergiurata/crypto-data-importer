@@ -25,14 +25,61 @@ class TestCoinGeckoProvider(unittest.TestCase):
     
     def setUp(self):
         """Set up test fixtures"""
-        # Create mock configuration
+        # Create mock configuration with all new config sections
         self.mock_config = Mock(spec=ConfigurationManager)
-        self.mock_config.get.return_value = ""
-        self.mock_config.getfloat.return_value = 1.5
-        self.mock_config.getint.return_value = 30
+        self.mock_config.get.side_effect = self._mock_config_get
+        self.mock_config.getfloat.side_effect = self._mock_config_getfloat
+        self.mock_config.getint.side_effect = self._mock_config_getint
+        self.mock_config.getboolean.side_effect = self._mock_config_getboolean
         
         # Create provider instance
         self.provider = CoinGeckoProvider(self.mock_config)
+    
+    def _mock_config_get(self, section, key, fallback=None):
+        """Mock config.get() method"""
+        defaults = {
+            'coingecko_api_key': '',
+            'cache_file': 'test_cache.json'
+        }
+        return defaults.get(key, fallback or '')
+    
+    def _mock_config_getfloat(self, section, key, fallback=None):
+        """Mock config.getfloat() method"""
+        defaults = {
+            'rate_limit_delay': 1.5,
+            'requests_per_minute': 24.0,
+            'min_requests_per_minute': 10.0,
+            'max_requests_per_minute': 50.0,
+            'min_rate_limit_delay': 1.0,
+            'max_rate_limit_delay': 10.0,
+            'rate_limit_adjustment_factor': 0.8,
+            'rate_limit_increase_factor': 1.2
+        }
+        return defaults.get(key, fallback or 1.5)
+    
+    def _mock_config_getint(self, section, key, fallback=None):
+        """Mock config.getint() method"""
+        defaults = {
+            'timeout_seconds': 30,
+            'retry_attempts': 3,
+            'exchange_data_ttl_hours': 24,
+            'market_data_ttl_hours': 1,
+            'coin_details_ttl_hours': 6,
+            'max_cache_size_mb': 100,
+            'consecutive_successes_threshold': 10,
+            'consecutive_failures_threshold': 3,
+            'monitoring_window_size': 20
+        }
+        return defaults.get(key, fallback or 30)
+    
+    def _mock_config_getboolean(self, section, key, fallback=None):
+        """Mock config.getboolean() method"""
+        defaults = {
+            'enable_api_cache': True,
+            'clear_expired_on_startup': True,
+            'enable_adaptive_rate_limiting': True
+        }
+        return defaults.get(key, fallback or False)
     
     def test_init_without_api_key(self):
         """Test initialization without API key"""
@@ -429,6 +476,227 @@ class TestCoinGeckoProviderIntegration(unittest.TestCase):
         
         # Should have data for 7+ days
         self.assertGreater(len(result['prices']), 5)
+
+
+class TestCoinGeckoProviderCaching(unittest.TestCase):
+    """Test cases for CoinGecko Provider caching functionality"""
+    
+    def setUp(self):
+        """Set up test fixtures with caching enabled"""
+        # Create mock configuration with caching enabled
+        self.mock_config = Mock(spec=ConfigurationManager)
+        self.mock_config.get.side_effect = lambda section, key, fallback=None: {
+            'coingecko_api_key': '',
+            'cache_file': 'test_cache.json'
+        }.get(key, fallback or '')
+        
+        self.mock_config.getfloat.side_effect = lambda section, key, fallback=None: {
+            'rate_limit_delay': 1.5,
+            'requests_per_minute': 24.0
+        }.get(key, fallback or 1.5)
+        
+        self.mock_config.getint.side_effect = lambda section, key, fallback=None: {
+            'timeout_seconds': 30,
+            'retry_attempts': 3,
+            'exchange_data_ttl_hours': 24,
+            'market_data_ttl_hours': 1,
+            'coin_details_ttl_hours': 6,
+            'max_cache_size_mb': 100
+        }.get(key, fallback or 30)
+        
+        self.mock_config.getboolean.side_effect = lambda section, key, fallback=None: {
+            'enable_api_cache': True,
+            'clear_expired_on_startup': True,
+            'enable_adaptive_rate_limiting': False  # Disable for cache-only testing
+        }.get(key, fallback or False)
+        
+        # Create provider instance
+        self.provider = CoinGeckoProvider(self.mock_config)
+    
+    def tearDown(self):
+        """Clean up test cache files"""
+        if os.path.exists('test_cache.json'):
+            os.remove('test_cache.json')
+    
+    def test_cache_initialization(self):
+        """Test cache system initialization"""
+        self.assertTrue(self.provider.cache_enabled)
+        self.assertEqual(self.provider.cache_file, 'test_cache.json')
+        self.assertEqual(self.provider.exchange_data_ttl_hours, 24)
+        self.assertEqual(self.provider.market_data_ttl_hours, 1)
+        self.assertEqual(self.provider.coin_details_ttl_hours, 6)
+    
+    def test_cache_key_generation(self):
+        """Test cache key generation"""
+        # Test simple endpoint
+        key1 = self.provider._get_cache_key("coins/bitcoin")
+        self.assertEqual(key1, "coins/bitcoin")
+        
+        # Test endpoint with parameters
+        params = {"tickers": "true", "market_data": "false"}
+        key2 = self.provider._get_cache_key("coins/bitcoin", params)
+        self.assertEqual(key2, "coins/bitcoin?market_data=false&tickers=true")
+    
+    def test_cache_storage_and_retrieval(self):
+        """Test caching storage and retrieval"""
+        test_data = {"id": "bitcoin", "name": "Bitcoin", "test": True}
+        cache_key = "test_key"
+        
+        # Store data in cache
+        self.provider._store_in_cache(cache_key, test_data)
+        
+        # Retrieve data from cache
+        retrieved_data = self.provider._get_from_cache(cache_key, 24)  # 24 hour TTL
+        self.assertEqual(retrieved_data, test_data)
+    
+    def test_cache_expiry(self):
+        """Test cache expiry functionality"""
+        test_data = {"id": "bitcoin", "name": "Bitcoin"}
+        cache_key = "expiry_test"
+        
+        # Store data
+        self.provider._store_in_cache(cache_key, test_data)
+        
+        # Test with very short TTL (should expire immediately)
+        expired_data = self.provider._get_from_cache(cache_key, 0.000001)
+        self.assertIsNone(expired_data)
+    
+    def test_cache_file_operations(self):
+        """Test cache file save and load operations"""
+        test_data = {"test_coin": {"id": "test", "name": "Test Coin"}}
+        
+        # Store test data
+        self.provider._store_in_cache("test_coin", test_data["test_coin"])
+        
+        # Save cache to file
+        self.provider._save_cache()
+        self.assertTrue(os.path.exists(self.provider.cache_file))
+        
+        # Create new provider instance to test loading
+        new_provider = CoinGeckoProvider(self.mock_config)
+        self.assertIn("test_coin", new_provider.api_cache)
+    
+    def test_clear_cache(self):
+        """Test cache clearing functionality"""
+        # Add some test data
+        self.provider._store_in_cache("test_key", {"data": "test"})
+        self.provider._save_cache()
+        
+        # Clear cache
+        self.provider.clear_cache()
+        
+        # Verify cache is empty and file is removed
+        self.assertEqual(len(self.provider.api_cache), 0)
+        self.assertFalse(os.path.exists(self.provider.cache_file))
+
+
+class TestCoinGeckoProviderAdaptiveRateLimiting(unittest.TestCase):
+    """Test cases for adaptive rate limiting functionality"""
+    
+    def setUp(self):
+        """Set up test fixtures with adaptive rate limiting enabled"""
+        # Create mock configuration with adaptive rate limiting
+        self.mock_config = Mock(spec=ConfigurationManager)
+        self.mock_config.get.side_effect = lambda section, key, fallback=None: {
+            'coingecko_api_key': '',
+            'cache_file': 'test_cache.json'
+        }.get(key, fallback or '')
+        
+        self.mock_config.getfloat.side_effect = lambda section, key, fallback=None: {
+            'rate_limit_delay': 2.5,
+            'requests_per_minute': 24.0,
+            'min_requests_per_minute': 10.0,
+            'max_requests_per_minute': 50.0,
+            'min_rate_limit_delay': 1.0,
+            'max_rate_limit_delay': 10.0,
+            'rate_limit_adjustment_factor': 0.8,
+            'rate_limit_increase_factor': 1.2
+        }.get(key, fallback or 2.5)
+        
+        self.mock_config.getint.side_effect = lambda section, key, fallback=None: {
+            'timeout_seconds': 30,
+            'retry_attempts': 3,
+            'consecutive_successes_threshold': 10,
+            'consecutive_failures_threshold': 3,
+            'monitoring_window_size': 20
+        }.get(key, fallback or 30)
+        
+        self.mock_config.getboolean.side_effect = lambda section, key, fallback=None: {
+            'enable_api_cache': False,  # Disable caching for rate limiting tests
+            'enable_adaptive_rate_limiting': True
+        }.get(key, fallback or False)
+        
+        # Create provider instance
+        self.provider = CoinGeckoProvider(self.mock_config)
+    
+    def test_adaptive_rate_limiting_initialization(self):
+        """Test adaptive rate limiting initialization"""
+        self.assertTrue(self.provider.adaptive_rate_limiting)
+        self.assertEqual(self.provider.current_requests_per_minute, 24.0)
+        self.assertEqual(self.provider.current_rate_limit_delay, 2.5)
+        self.assertEqual(self.provider.min_requests_per_minute, 10.0)
+        self.assertEqual(self.provider.max_requests_per_minute, 50.0)
+    
+    def test_record_request_success(self):
+        """Test recording successful requests"""
+        initial_successes = self.provider.consecutive_successes
+        
+        # Record a successful request
+        self.provider.record_request_result("coins/bitcoin", True, 1.5, 200)
+        
+        # Check that success was recorded
+        self.assertEqual(self.provider.consecutive_successes, initial_successes + 1)
+        self.assertEqual(self.provider.consecutive_failures, 0)
+        self.assertEqual(len(self.provider.request_history), 1)
+    
+    def test_record_request_failure(self):
+        """Test recording failed requests"""
+        initial_failures = self.provider.consecutive_failures
+        
+        # Record a failed request
+        self.provider.record_request_result("coins/bitcoin", False, 1.5, 429)
+        
+        # Check that failure was recorded
+        self.assertEqual(self.provider.consecutive_failures, initial_failures + 1)
+        self.assertEqual(self.provider.consecutive_successes, 0)
+        self.assertEqual(len(self.provider.request_history), 1)
+    
+    def test_rate_adjustment_on_consecutive_failures(self):
+        """Test rate limiting adjustment after consecutive failures"""
+        initial_delay = self.provider.current_rate_limit_delay
+        
+        # Simulate consecutive failures (threshold is 3)
+        for i in range(3):
+            self.provider.record_request_result("coins/test", False, 1.5, 429)
+        
+        # Rate should be decreased (delay increased)
+        self.assertGreater(self.provider.current_rate_limit_delay, initial_delay)
+    
+    def test_rate_adjustment_on_consecutive_successes(self):
+        """Test rate limiting adjustment after consecutive successes"""
+        initial_delay = self.provider.current_rate_limit_delay
+        
+        # Simulate consecutive successes (threshold is 10)
+        for i in range(10):
+            self.provider.record_request_result("coins/test", True, 1.5, 200)
+        
+        # Rate should be increased (delay decreased)
+        self.assertLess(self.provider.current_rate_limit_delay, initial_delay)
+    
+    def test_get_current_rate_stats(self):
+        """Test getting current rate limiting statistics"""
+        # Record some test requests
+        self.provider.record_request_result("coins/test1", True, 1.5, 200)
+        self.provider.record_request_result("coins/test2", False, 2.0, 429)
+        
+        stats = self.provider.get_current_rate_stats()
+        
+        self.assertEqual(stats["mode"], "adaptive")
+        self.assertIn("current_requests_per_minute", stats)
+        self.assertIn("current_delay", stats)
+        self.assertIn("consecutive_successes", stats)
+        self.assertIn("consecutive_failures", stats)
+        self.assertIn("recent_success_rate", stats)
 
 
 if __name__ == '__main__':

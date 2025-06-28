@@ -325,8 +325,8 @@ class AbstractDataProvider(ABC):
         
         if old_delay != self.current_rate_limit_delay:
             logger.warning(f"Rate limit decreased due to {reason}: "
-                         f"{old_rpm:.1f}→{self.current_requests_per_minute:.1f} req/min, "
-                         f"{old_delay:.1f}→{self.current_rate_limit_delay:.1f}s delay")
+                         f"{old_rpm:.1f} -> {self.current_requests_per_minute:.1f} req/min, "
+                         f"{old_delay:.1f} -> {self.current_rate_limit_delay:.1f}s delay")
     
     def _increase_rate_limit(self, reason: str):
         """Increase request rate (decrease delay) due to good performance"""

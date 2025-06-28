@@ -179,9 +179,9 @@ class KrakenMapper(AbstractExchangeMapper):
                 
                 try:
                     # Get exchange data for this coin
-                    start_time = time.time()
+                    request_start_time = time.time()
                     exchange_data = data_provider.get_exchange_data(coin_id)
-                    response_time = time.time() - start_time
+                    response_time = time.time() - request_start_time
                     
                     # Record successful request for adaptive rate limiting
                     if hasattr(data_provider, 'record_request_result'):
@@ -210,7 +210,7 @@ class KrakenMapper(AbstractExchangeMapper):
                     
                     # Record failed request for adaptive rate limiting
                     if hasattr(data_provider, 'record_request_result'):
-                        response_time = time.time() - start_time if 'start_time' in locals() else None
+                        response_time = time.time() - request_start_time if 'request_start_time' in locals() else None
                         # Determine status code based on exception type
                         status_code = 429 if "rate limit" in str(e).lower() or "429" in str(e) else 500
                         data_provider.record_request_result(f"coins/{coin_id}", False, response_time, status_code)

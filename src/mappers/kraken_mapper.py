@@ -183,18 +183,31 @@ class KrakenMapper(AbstractExchangeMapper):
                     exchange_data = data_provider.get_exchange_data(coin_id)
                     response_time = time.time() - request_start_time
                     
-                    # Record successful request for adaptive rate limiting
+                    # Record request result for adaptive rate limiting based on actual success/failure
                     if hasattr(data_provider, 'record_request_result'):
-                        data_provider.record_request_result(f"coins/{coin_id}", True, response_time, 200)
+                        if exchange_data:
+                            data_provider.record_request_result(f"coins/{coin_id}", True, response_time, 200)
+                        else:
+                            # Failed to get data - could be 429, 500, etc.
+                            data_provider.record_request_result(f"coins/{coin_id}", False, response_time, 429)
                     
                     if exchange_data:
                         kraken_info = self._extract_kraken_info(exchange_data)
                         if kraken_info:
                             mapping[coin_id] = kraken_info
                             mapped_count += 1
-                    
-                    # Add to processed list
-                    processed_coin_ids.append(coin_id)
+                        # Successfully processed (even if no Kraken mapping found)
+                        processed_coin_ids.append(coin_id)
+                    else:
+                        # Failed to get exchange data - add to failed list
+                        if coin_id not in failed_coin_ids:
+                            failed_coin_ids.append(coin_id)
+                        # Only mark as processed if max retries exceeded
+                        retry_count = self._get_retry_count(coin_id)
+                        if retry_count >= self.max_retry_attempts:
+                            processed_coin_ids.append(coin_id)
+                        else:
+                            self._update_retry_count(coin_id, retry_count + 1)
                     
                     # Rate limiting - use provider's adaptive delay if available
                     if hasattr(data_provider, 'current_rate_limit_delay'):

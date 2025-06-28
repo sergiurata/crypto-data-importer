@@ -308,13 +308,13 @@ class AbstractDataProvider(ABC):
         old_delay = self.current_rate_limit_delay
         old_rpm = self.current_requests_per_minute
         
-        # Increase delay
+        # Increase delay (slow down) - take the SMALLER of (calculated vs max allowed)
         self.current_rate_limit_delay = min(
             self.current_rate_limit_delay / self.rate_limit_adjustment_factor,
             self.max_rate_limit_delay
         )
         
-        # Decrease requests per minute
+        # Decrease requests per minute (slow down) - take the LARGER of (calculated vs min allowed)
         self.current_requests_per_minute = max(
             self.current_requests_per_minute * self.rate_limit_adjustment_factor,
             self.min_requests_per_minute

@@ -245,8 +245,14 @@ class ImportOrchestrator:
                     if process_result.error_message:
                         result.errors.append(f"{coin['symbol']}: {process_result.error_message}")
                 
-                # Rate limiting
-                time.sleep(self.config.getfloat('IMPORT', 'rate_limit_delay', 1.5))
+                # Rate limiting - use provider's adaptive delay if available, otherwise static delay
+                if hasattr(self.data_provider, 'current_rate_limit_delay'):
+                    delay = self.data_provider.current_rate_limit_delay
+                    logger.debug(f"Using adaptive rate limit delay: {delay:.2f}s")
+                else:
+                    delay = self.config.getfloat('IMPORT', 'rate_limit_delay', 1.5)
+                    logger.debug(f"Using static rate limit delay: {delay:.2f}s")
+                time.sleep(delay)
             
             # Auto-update if enabled
             if self.config.getboolean('UPDATES', 'update_on_startup'):
@@ -448,8 +454,14 @@ class ImportOrchestrator:
                                     updated_count += 1
                                     logger.info(f"Updated {symbol}: {new_records} new, {updated_records} updated")
                     
-                    # Rate limiting
-                    time.sleep(self.config.getfloat('IMPORT', 'rate_limit_delay', 1.5))
+                    # Rate limiting - use provider's adaptive delay if available, otherwise static delay
+                    if hasattr(self.data_provider, 'current_rate_limit_delay'):
+                        delay = self.data_provider.current_rate_limit_delay
+                        logger.debug(f"Using adaptive rate limit delay for update: {delay:.2f}s")
+                    else:
+                        delay = self.config.getfloat('IMPORT', 'rate_limit_delay', 1.5)
+                        logger.debug(f"Using static rate limit delay for update: {delay:.2f}s")
+                    time.sleep(delay)
                     
                 except Exception as e:
                     logger.error(f"Failed to update {symbol}: {e}")

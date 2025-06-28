@@ -89,6 +89,7 @@ class CoinGeckoProvider(AbstractDataProvider):
         cached_result = self._get_from_cache(cache_key, self.market_data_ttl_hours)
         if cached_result:
             logger.debug(f"Using cached market data for {coin_id} ({days} days)")
+            # Note: Cached responses don't count as API requests for adaptive rate limiting
             return cached_result
         
         def _make_request():
@@ -130,6 +131,8 @@ class CoinGeckoProvider(AbstractDataProvider):
         cached_result = self._get_from_cache(cache_key, self.exchange_data_ttl_hours)
         if cached_result:
             logger.debug(f"Using cached exchange data for {coin_id}")
+            # Note: Cached responses don't count as API requests for adaptive rate limiting
+            # This prevents cache hits from affecting rate limit adjustments
             return cached_result
         
         def _make_request():
@@ -173,6 +176,7 @@ class CoinGeckoProvider(AbstractDataProvider):
         cached_result = self._get_from_cache(cache_key, self.coin_details_ttl_hours)
         if cached_result:
             logger.debug(f"Using cached coin details for {coin_id}")
+            # Note: Cached responses don't count as API requests for adaptive rate limiting
             return cached_result
         
         def _make_request():

@@ -179,7 +179,13 @@ class KrakenMapper(AbstractExchangeMapper):
                 
                 try:
                     # Get exchange data for this coin
+                    start_time = time.time()
                     exchange_data = data_provider.get_exchange_data(coin_id)
+                    response_time = time.time() - start_time
+                    
+                    # Record successful request for adaptive rate limiting
+                    if hasattr(data_provider, 'record_request_result'):
+                        data_provider.record_request_result(f"coins/{coin_id}", True, response_time, 200)
                     
                     if exchange_data:
                         kraken_info = self._extract_kraken_info(exchange_data)
@@ -190,11 +196,25 @@ class KrakenMapper(AbstractExchangeMapper):
                     # Add to processed list
                     processed_coin_ids.append(coin_id)
                     
-                    # Rate limiting
-                    time.sleep(self.config.getfloat('IMPORT', 'rate_limit_delay', 1.5))
+                    # Rate limiting - use provider's adaptive delay if available
+                    if hasattr(data_provider, 'current_rate_limit_delay'):
+                        delay = data_provider.current_rate_limit_delay
+                        logger.debug(f"Using adaptive rate limit delay: {delay:.2f}s")
+                    else:
+                        delay = self.config.getfloat('IMPORT', 'rate_limit_delay', 1.5)
+                        logger.debug(f"Using static rate limit delay: {delay:.2f}s")
+                    time.sleep(delay)
                     
                 except Exception as e:
                     logger.debug(f"Failed to process {coin_id}: {e}")
+                    
+                    # Record failed request for adaptive rate limiting
+                    if hasattr(data_provider, 'record_request_result'):
+                        response_time = time.time() - start_time if 'start_time' in locals() else None
+                        # Determine status code based on exception type
+                        status_code = 429 if "rate limit" in str(e).lower() or "429" in str(e) else 500
+                        data_provider.record_request_result(f"coins/{coin_id}", False, response_time, status_code)
+                    
                     # Track retry attempt
                     retry_count = self._get_retry_count(coin_id, checkpoint_data if 'checkpoint_data' in locals() else None)
                     self._update_retry_count(coin_id, retry_count + 1)
